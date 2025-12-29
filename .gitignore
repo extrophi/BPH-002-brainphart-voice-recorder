@@ -78,3 +78,4 @@ Thumbs.db
 *.pem
 *.p12
 *.mobileprovision
+VoiceRecorder/whisperkit-coreml

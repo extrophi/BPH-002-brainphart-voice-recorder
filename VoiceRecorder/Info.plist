@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSSupportsLiveActivities</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Voice Recorder needs microphone access to record your voice. All recordings are processed locally on your device using on-device AI. Your voice data never leaves your device.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Voice Recorder uses on-device speech recognition to transcribe your recordings. All processing happens locally for maximum privacy.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>brainphart</string>
+                <string>voicerecorder</string>
+            </array>
+            <key>CFBundleURLName</key>
+            <string>com.brainphart.voicerecorder</string>
+        </dict>
+    </array>
+</dict>
+</plist>
