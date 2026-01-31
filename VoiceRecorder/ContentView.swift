@@ -28,13 +28,21 @@ struct MainContentView: View {
                 }
                 .tag(1)
 
+            // MARK: - Brain Dump Tab
+            BrainDumpView(recorder: recorder, appState: appState)
+                .tabItem {
+                    Image(systemName: "brain.head.profile")
+                    Text("Brain Dump")
+                }
+                .tag(2)
+
             // MARK: - Keyboard Setup Tab
             KeyboardSetupView()
                 .tabItem {
                     Image(systemName: "keyboard")
                     Text("Keyboard")
                 }
-                .tag(2)
+                .tag(3)
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleRecording)) { _ in
             if recorder.isRecording {
@@ -386,6 +394,573 @@ struct KeyboardSetupView: View {
     private func openSettings() {
         if let url = URL(string: UIApplication.openSettingsURLString) {
             UIApplication.shared.open(url)
+        }
+    }
+}
+
+// MARK: - Brain Dump View
+
+struct BrainDumpView: View {
+    @ObservedObject var recorder: AudioRecorder
+    @ObservedObject var appState: AppState
+    @State private var selectedPrompt: BrainDumpPrompt?
+    @State private var isRecording = false
+    @State private var dumpText = ""
+    @State private var showEditor = false
+    @State private var showExportSheet = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Header
+                    VStack(spacing: 8) {
+                        Image(systemName: "brain.head.profile")
+                            .font(.system(size: 60))
+                            .foregroundColor(.purple)
+
+                        Text("Brain Dump")
+                            .font(.largeTitle.bold())
+
+                        Text("Voice-capture your thoughts with guided prompts")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.top, 20)
+
+                    // Prompt Cards
+                    VStack(spacing: 16) {
+                        ForEach(BrainDumpPrompt.allCases) { prompt in
+                            PromptCard(prompt: prompt, isSelected: selectedPrompt == prompt) {
+                                selectedPrompt = prompt
+                                startDump(with: prompt)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    // Recording indicator
+                    if recorder.isRecording {
+                        VStack(spacing: 16) {
+                            HStack(spacing: 12) {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 12, height: 12)
+
+                                Text("Recording...")
+                                    .font(.headline)
+
+                                Text(formatTime(recorder.recordingDuration))
+                                    .font(.system(.body, design: .monospaced))
+                            }
+
+                            Button(action: stopDump) {
+                                Text("Stop & Process")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 32)
+                                    .padding(.vertical, 14)
+                                    .background(Capsule().fill(Color.red))
+                            }
+                        }
+                        .padding()
+                        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+                        .padding(.horizontal)
+                    }
+
+                    // Transcribing indicator
+                    if appState.isTranscribing {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            Text("Processing your brain dump...")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                    }
+
+                    // Result preview
+                    if !dumpText.isEmpty && !recorder.isRecording && !appState.isTranscribing {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Captured")
+                                    .font(.headline)
+                                Spacer()
+                                Button("Edit") {
+                                    showEditor = true
+                                }
+                                .font(.subheadline.bold())
+                            }
+
+                            Text(dumpText)
+                                .font(.body)
+                                .lineLimit(6)
+                                .padding()
+                                .background(RoundedRectangle(cornerRadius: 12).fill(Color(.tertiarySystemBackground)))
+
+                            HStack(spacing: 12) {
+                                Button(action: { UIPasteboard.general.string = dumpText }) {
+                                    Label("Copy", systemImage: "doc.on.clipboard")
+                                        .font(.subheadline.bold())
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button(action: { showExportSheet = true }) {
+                                    Label("Export MD", systemImage: "square.and.arrow.up")
+                                        .font(.subheadline.bold())
+                                }
+                                .buttonStyle(.bordered)
+
+                                Spacer()
+
+                                Button(action: clearDump) {
+                                    Label("Clear", systemImage: "trash")
+                                        .font(.subheadline.bold())
+                                        .foregroundColor(.red)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                        .padding()
+                        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+                        .padding(.horizontal)
+                    }
+
+                    Spacer(minLength: 100)
+                }
+            }
+            .navigationTitle("Brain Dump")
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showEditor) {
+                BrainDumpEditorView(text: $dumpText, prompt: selectedPrompt)
+            }
+            .sheet(isPresented: $showExportSheet) {
+                ExportMarkdownView(text: dumpText, prompt: selectedPrompt)
+            }
+            .onChange(of: appState.latestTranscript) { _, newValue in
+                if !newValue.isEmpty && selectedPrompt != nil {
+                    dumpText = formatDumpWithPrompt(newValue)
+                }
+            }
+        }
+    }
+
+    private func startDump(with prompt: BrainDumpPrompt) {
+        dumpText = ""
+        appState.latestTranscript = ""
+        let sessionId = UUID().uuidString
+        Task {
+            await recorder.startRecording(sessionId: sessionId)
+        }
+    }
+
+    private func stopDump() {
+        recorder.stopRecording()
+        Task {
+            appState.isTranscribing = true
+            do {
+                guard let audioData = recorder.getLastRecordingData() else {
+                    throw TranscriptionError.formatError
+                }
+                let result = try await TranscriptionManager.shared.transcribe(audioData: audioData)
+                await MainActor.run {
+                    appState.latestTranscript = result
+                    dumpText = formatDumpWithPrompt(result)
+                }
+            } catch {
+                print("Transcription error: \(error)")
+            }
+            await MainActor.run {
+                appState.isTranscribing = false
+            }
+        }
+    }
+
+    private func clearDump() {
+        dumpText = ""
+        selectedPrompt = nil
+        appState.latestTranscript = ""
+    }
+
+    private func formatDumpWithPrompt(_ transcript: String) -> String {
+        guard let prompt = selectedPrompt else { return transcript }
+
+        // Use the full template and inject the transcript
+        var output = prompt.fullTemplate
+        output = output.replacingOccurrences(of: "[RAW TRANSCRIPTION HERE]", with: transcript)
+        output = output.replacingOccurrences(of: "[NO FILTER - JUST TALK]", with: transcript)
+        return output
+    }
+
+    private func formatTime(_ duration: TimeInterval) -> String {
+        let mins = Int(duration) / 60
+        let secs = Int(duration) % 60
+        return String(format: "%02d:%02d", mins, secs)
+    }
+}
+
+// MARK: - Brain Dump Prompts (KJ's actual templates)
+
+enum BrainDumpPrompt: String, CaseIterable, Identifiable {
+    case brainDump = "brain_dump"
+    case endOfDay = "end_of_day"
+    case timeManagement = "time_management"
+    case crisisDump = "crisis_dump"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .brainDump: return "Brain Dump"
+        case .endOfDay: return "End of Day"
+        case .timeManagement: return "Time Management"
+        case .crisisDump: return "Crisis Dump"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .brainDump: return "brain.head.profile"
+        case .endOfDay: return "moon.stars.fill"
+        case .timeManagement: return "clock.badge.checkmark"
+        case .crisisDump: return "flame.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .brainDump: return .purple
+        case .endOfDay: return .indigo
+        case .timeManagement: return .blue
+        case .crisisDump: return .red
+        }
+    }
+
+    var promptText: String {
+        switch self {
+        case .brainDump:
+            return """
+            BASELINE CHECK:
+            - Sleep: Hours? Quality?
+            - Exercise: Movement yesterday?
+            - SUDS Anxiety (0-10)?
+            - Energy (1-5)?
+            - Outlook (1-5)?
+
+            Now dump whatever's on your mind.
+            No filter. Just talk.
+            """
+        case .endOfDay:
+            return """
+            4D PROCESSING:
+            - Clarity: How clear are today's insights?
+            - Impact: What mattered most?
+            - Actionable: What can be acted on?
+            - Universal: What applies beyond today?
+
+            DOMAINS TO REVIEW:
+            - Mental Health
+            - Business/Technical
+            - Personal/Social
+            - Financial/Tasks
+            - Creative/Ideas
+
+            What's tomorrow's focus?
+            """
+        case .timeManagement:
+            return """
+            EXTRACT FROM TODAY:
+            - Time-based events -> Calendar
+            - To-dos -> Reminders
+            - Completed work -> Achievement blocks
+
+            COLOR CODE:
+            - Blue: Professional/Support
+            - Yellow: Routines
+            - Green: Completed
+            - Red: Disruptions
+
+            What needs scheduling?
+            """
+        case .crisisDump:
+            return """
+            Just talk. Get it all out. No filter.
+
+            This is an ideation diary, not therapy.
+            Acknowledge ideas without judgment.
+            Focus on clearing mental space.
+
+            What's overwhelming you right now?
+            What's the worst case? Is it survivable?
+            What's one small step you can take?
+            """
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .brainDump: return "Baseline + raw capture, externalize everything"
+        case .endOfDay: return "4D classification, extract actionables"
+        case .timeManagement: return "Tasks to calendar/reminders"
+        case .crisisDump: return "When overwhelmed - just dump, no filter"
+        }
+    }
+
+    var fullTemplate: String {
+        switch self {
+        case .brainDump:
+            return """
+            # Daily Brain Dump - \(Date().formatted(date: .abbreviated, time: .omitted))
+
+            ## BASELINE DATA
+            | Category | Response |
+            |----------|----------|
+            | Sleep (hours/quality) | |
+            | Exercise (Y/N) | |
+            | SUDS Anxiety (0-10) | |
+            | Energy (1-5) | |
+            | Outlook (1-5) | |
+
+            ## DUMP
+
+            [RAW TRANSCRIPTION HERE]
+
+            ## DOMAINS
+            - #mental-health
+            - #business
+            - #personal
+            - #financial
+            - #creative
+
+            ## ACTIONABLES
+            - [ ]
+            - [ ]
+
+            ---
+            """
+        case .endOfDay:
+            return """
+            # End of Day Processing - \(Date().formatted(date: .abbreviated, time: .omitted))
+
+            ## DAILY METRICS
+            - Sleep:
+            - Exercise:
+            - SUDS Range:
+            - Energy Pattern:
+            - Medication:
+
+            ## 4D INSIGHTS
+
+            ### Mental Health
+            - (C:_, I:_, A:_, U:_)
+
+            ### Business/Technical
+            - (C:_, I:_, A:_, U:_)
+
+            ### Personal/Social
+            - (C:_, I:_, A:_, U:_)
+
+            ### Financial/Tasks
+            - (C:_, I:_, A:_, U:_)
+
+            ### Creative/Ideas
+            - (C:_, I:_, A:_, U:_)
+
+            ## ACTIONABLE ITEMS
+
+            HIGH PRIORITY:
+            - [ ]
+
+            MEDIUM PRIORITY:
+            - [ ]
+
+            ## DAILY SUMMARY
+            - Big Win:
+            - Main Challenge:
+            - Tomorrow's Focus:
+
+            ---
+            """
+        case .timeManagement:
+            return """
+            # Time Management - \(Date().formatted(date: .abbreviated, time: .omitted))
+
+            ## CALENDAR BLOCKS (30min increments)
+
+            ### Completed Achievements
+            -
+
+            ### Scheduled
+            -
+
+            ## REMINDERS/TO-DOS
+            - [ ]
+            - [ ]
+
+            ## BREADCRUMB TRAIL
+            Color coding:
+            - Blue: Professional
+            - Yellow: Routines
+            - Cyan: Study
+            - Grey: Rest
+            - Green: Completed
+            - Red: Disruptions
+
+            ---
+            """
+        case .crisisDump:
+            return """
+            # Crisis Dump - \(Date().formatted(date: .abbreviated, time: .shortened))
+
+            ## RAW DUMP
+
+            [NO FILTER - JUST TALK]
+
+            ## PROCESSING
+            - What's overwhelming:
+            - Worst case scenario:
+            - Is it survivable: Y/N
+            - One small step:
+
+            ---
+            """
+        }
+    }
+}
+
+// MARK: - Prompt Card
+
+struct PromptCard: View {
+    let prompt: BrainDumpPrompt
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Image(systemName: prompt.icon)
+                    .font(.title2)
+                    .foregroundColor(prompt.color)
+                    .frame(width: 44, height: 44)
+                    .background(prompt.color.opacity(0.15))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(prompt.title)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text(prompt.description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "mic.fill")
+                    .font(.title3)
+                    .foregroundColor(.red)
+            }
+            .padding()
+            .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(isSelected ? prompt.color : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Brain Dump Editor
+
+struct BrainDumpEditorView: View {
+    @Environment(\.dismiss) var dismiss
+    @Binding var text: String
+    let prompt: BrainDumpPrompt?
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Prompt reminder
+                if let prompt = prompt {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(prompt.title)
+                            .font(.headline)
+                        Text(prompt.promptText)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.secondarySystemBackground))
+                }
+
+                // Editor
+                TextEditor(text: $text)
+                    .font(.system(size: 18))
+                    .padding()
+                    .focused($isFocused)
+            }
+            .navigationTitle("Edit Brain Dump")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .bold()
+                }
+            }
+            .onAppear { isFocused = true }
+        }
+    }
+}
+
+// MARK: - Export Markdown View
+
+struct ExportMarkdownView: View {
+    @Environment(\.dismiss) var dismiss
+    let text: String
+    let prompt: BrainDumpPrompt?
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 60))
+                    .foregroundColor(.blue)
+
+                Text("Export as Markdown")
+                    .font(.title2.bold())
+
+                Text("Your brain dump will be saved as a .md file")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                // Share button
+                ShareLink(item: text, subject: Text(prompt?.title ?? "Brain Dump"), message: Text("Exported from BrainPhart")) {
+                    Label("Share / Save", systemImage: "square.and.arrow.up")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .cornerRadius(14)
+                }
+                .padding(.horizontal)
+
+                Button("Cancel") { dismiss() }
+                    .padding(.bottom)
+            }
+            .padding()
+            .navigationTitle("Export")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }
