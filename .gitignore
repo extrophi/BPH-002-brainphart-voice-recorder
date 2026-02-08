@@ -1,0 +1,61 @@
+# Build
+build/
+.build/
+DerivedData/
+*.dSYM.zip
+*.dSYM
+*.hmap
+*.ipa
+
+# Xcode
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.xcworkspace
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+
+# Dependencies (built from source by setup.sh)
+Dependencies/whisper.cpp/build/
+Dependencies/ffmpeg-src/
+Dependencies/ffmpeg-build/
+
+# Models (downloaded by setup.sh — too large for git)
+Resources/models/*.bin
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Secrets
+*.env
+*.pem
+*.key
+*.p12
+*.mobileprovision
