@@ -1,0 +1,62 @@
+dependencies:
+  whisper_cpp:
+    source: git_submodule
+    repo: https://github.com/ggml-org/whisper.cpp.git
+    version: v1.7.3
+    path: Dependencies/whisper.cpp
+    build:
+      type: cmake
+      flags:
+        - -DWHISPER_METAL=ON
+        - -DCMAKE_BUILD_TYPE=Release
+        - -DBUILD_SHARED_LIBS=OFF
+    outputs:
+      - lib/libwhisper.a
+      - lib/libggml.a
+      - include/whisper.h
+
+  ffmpeg:
+    source: git
+    repo: https://github.com/FFmpeg/FFmpeg.git
+    version: "n7.1"
+    path: Dependencies/ffmpeg-src
+    build:
+      type: configure_make
+      prefix: Dependencies/ffmpeg-build
+      flags:
+        - --enable-static
+        - --disable-shared
+        - --disable-programs
+        - --disable-doc
+        - --disable-network
+        - --disable-autodetect
+        - --enable-avformat
+        - --enable-avcodec
+        - --enable-avutil
+        - --enable-avdevice
+        - --enable-swresample
+        - --enable-demuxer=mov,wav
+        - --enable-muxer=ipod,wav
+        - --enable-decoder=aac,pcm_s16le,pcm_f32le
+        - --enable-encoder=aac,pcm_s16le
+        - --enable-protocol=file
+        - --enable-filter=aresample
+        - --enable-indev=avfoundation
+    outputs:
+      - lib/libavformat.a
+      - lib/libavcodec.a
+      - lib/libavutil.a
+      - lib/libavdevice.a
+      - lib/libswresample.a
+
+  whisper_model:
+    source: https
+    url: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+    sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe"
+    size_mb: 148
+    path: Resources/models/ggml-base.en.bin
+
+  sqlite:
+    source: system
+    note: macOS ships libsqlite3 — no install needed
+    framework: libsqlite3.tbd
