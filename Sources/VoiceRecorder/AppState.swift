@@ -16,6 +16,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import VoiceRecorderBridge
 
 @MainActor
 @Observable
@@ -99,12 +100,9 @@ final class AppState {
 
         // Wire up the burst-chunk callback so each 35-second chunk is
         // persisted immediately.
-        audioBridge.onChunkComplete = { [weak self] chunkPath, chunkIndex, durationMs in
+        audioBridge.onChunkComplete = { [weak self] audioData, chunkIndex in
             guard let self, let sid = self.activeSessionId else { return }
-            self.storageBridge.addChunk(sid,
-                                        chunkIndex: chunkIndex,
-                                        audioPath: chunkPath,
-                                        durationMs: durationMs)
+            self.storageBridge.addChunk(audioData, toSession: sid, at: chunkIndex)
         }
 
         audioBridge.startRecording()
@@ -119,24 +117,18 @@ final class AppState {
     func stopRecording() {
         guard isRecording else { return }
 
-        audioBridge.stopRecording { [weak self] finalChunkPath, finalDurationMs in
+        audioBridge.stopRecording { [weak self] sessionId, error in
             guard let self else { return }
-
-            // Persist the final partial chunk.
-            if let sid = self.activeSessionId,
-               let path = finalChunkPath {
-                let lastIndex = Int32(self.storageBridge.chunkCount(forSession: sid))
-                self.storageBridge.addChunk(sid,
-                                            chunkIndex: lastIndex,
-                                            audioPath: path,
-                                            durationMs: finalDurationMs)
-            }
 
             self.isRecording = false
             self.stopMeteringPolling()
             self.stopElapsedTimer()
             self.currentMeteringLevel = 0
             self.meteringSamples = Array(repeating: 0, count: Config.meteringSampleCount)
+
+            if error != nil {
+                log.error("Stop recording error: \(error!.localizedDescription)")
+            }
 
             // Begin transcription.
             self.transcribeActiveSession()
@@ -160,18 +152,28 @@ final class AppState {
 
         isTranscribing = true
         transcriptionProgress = 0
-        storageBridge.updateStatus(sessionId, status: "transcribing")
 
-        // Retrieve the concatenated audio file for the session.
-        guard let audioPath = storageBridge.getAudioForSession(sessionId) else {
+        // Get audio data and write to a temp file for whisper.
+        guard let audioData = storageBridge.getAudioForSession(sessionId) else {
             isTranscribing = false
-            storageBridge.updateStatus(sessionId, status: "failed")
+            loadSessions()
+            return
+        }
+
+        // Write audio data to temp file.
+        let tempDir = FileManager.default.temporaryDirectory
+        let audioURL = tempDir.appendingPathComponent("\(sessionId)_audio.m4a")
+        do {
+            try audioData.write(to: audioURL, options: .atomic)
+        } catch {
+            log.error("Failed to write temp audio: \(error.localizedDescription)")
+            isTranscribing = false
             loadSessions()
             return
         }
 
         whisperBridge.transcribeAudio(
-            atPath: audioPath,
+            atPath: audioURL.path,
             sampleRate: 16000,
             progress: { [weak self] progress in
                 self?.transcriptionProgress = progress
@@ -181,15 +183,17 @@ final class AppState {
                 self.isTranscribing = false
                 self.transcriptionProgress = 0
 
+                // Clean up temp file.
+                try? FileManager.default.removeItem(at: audioURL)
+
                 if let transcript, error == nil {
-                    self.storageBridge.updateTranscript(sessionId, transcript: transcript)
-                    self.storageBridge.completeSession(sessionId)
+                    self.storageBridge.updateTranscript(transcript, forSession: sessionId)
+                    self.storageBridge.completeSession(sessionId, withDuration: 0)
                     self.latestTranscript = transcript
 
                     // Auto-paste the transcription to the user's cursor.
                     AutoPaste.pasteText(transcript)
                 } else {
-                    self.storageBridge.updateStatus(sessionId, status: "failed")
                     if let error {
                         log.error("Transcription failed: \(error.localizedDescription)")
                     }
@@ -230,7 +234,7 @@ final class AppState {
         meteringTimer = Timer.scheduledTimer(withTimeInterval: Config.meteringPollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.isRecording else { return }
-                let level = self.audioBridge.currentMeteringLevel
+                let level = self.audioBridge.currentMeteringLevel()
                 self.currentMeteringLevel = level
 
                 // Shift samples left and append the new value.

@@ -11,6 +11,7 @@
 
 import SwiftUI
 import AppKit
+import VoiceRecorderBridge
 
 @main
 struct VoiceRecorderApp: App {
@@ -59,6 +60,7 @@ struct VoiceRecorderApp: App {
             log.info("Whisper model loaded from: \(path)")
         } else {
             log.error("Failed to load whisper model from: \(path)")
+        }
     }
 
     // MARK: - Crash Recovery

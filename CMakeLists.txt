@@ -71,6 +71,7 @@ add_library(VoiceRecorderCore STATIC ${CORE_SOURCES})
 target_include_directories(VoiceRecorderCore PUBLIC
     "${CMAKE_SOURCE_DIR}/Sources/VoiceRecorderCore"
     "${WHISPER_INCLUDE_DIR}"
+    "${WHISPER_DIR}/ggml/include"
     "${FFMPEG_INCLUDE_DIR}"
 )
 

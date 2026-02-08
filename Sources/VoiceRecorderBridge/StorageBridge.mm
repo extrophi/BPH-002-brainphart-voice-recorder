@@ -142,7 +142,7 @@ static VRSession *SessionToObjC(const vr::RecordingSession &s) {
         // from the audio data or set it to 0.
         chunk.duration_ms = 0;
 
-        _db->add_chunk(chunk);
+        _db->add_chunk(chunk.session_id, chunk.chunk_index, chunk.audio_data, chunk.duration_ms);
 
     } catch (const std::exception &e) {
         NSLog(@"[StorageBridge] addChunk exception: %s", e.what());
@@ -156,7 +156,7 @@ static VRSession *SessionToObjC(const vr::RecordingSession &s) {
     try {
         std::string sid  = std::string([sessionId UTF8String]);
         std::string text = std::string([transcript UTF8String]);
-        _db->update_transcript(sid, text);
+        _db->update_transcript(sid, text, 0);
     } catch (const std::exception &e) {
         NSLog(@"[StorageBridge] updateTranscript exception: %s", e.what());
     }
@@ -168,23 +168,8 @@ static VRSession *SessionToObjC(const vr::RecordingSession &s) {
 
     try {
         std::string sid = std::string([sessionId UTF8String]);
-        // Mark the session status as complete and record its duration.
-        // DatabaseManager exposes update_transcript and individual field
-        // setters.  We rely on a dedicated complete method or compose the
-        // necessary mutations here.
-        vr::RecordingSession session;
-        session.id           = sid;
-        session.status       = vr::RecordingStatus::complete;
-        session.duration_ms  = static_cast<int64_t>(durationMs);
-        session.completed_at = static_cast<int64_t>([[NSDate date] timeIntervalSince1970]);
-
-        // The C++ DatabaseManager provides a generic update path.
-        // We call the individual setters that it exposes.
-        _db->update_transcript(sid, "");  // no-op placeholder if transcript already set
-
-        // Use the session-level complete helper.
-        _db->complete_session(sid, static_cast<int64_t>(durationMs));
-
+        // Use update_status to mark complete.
+        _db->update_status(sid, vr::RecordingStatus::complete);
     } catch (const std::exception &e) {
         NSLog(@"[StorageBridge] completeSession exception: %s", e.what());
     }

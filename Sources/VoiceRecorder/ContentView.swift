@@ -13,6 +13,7 @@
 //
 
 import SwiftUI
+import VoiceRecorderBridge
 
 struct ContentView: View {
     @Environment(AppState.self) private var appState

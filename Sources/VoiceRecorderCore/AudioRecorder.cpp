@@ -3,20 +3,20 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
-// TODO: Include FFmpeg headers when linking against the real libraries:
-//
-// extern "C" {
-// #include <libavdevice/avdevice.h>
-// #include <libavformat/avformat.h>
-// #include <libavcodec/avcodec.h>
-// #include <libswresample/swresample.h>
-// #include <libavutil/opt.h>
-// #include <libavutil/audio_fifo.h>
-// }
+extern "C" {
+#include <libavdevice/avdevice.h>
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libswresample/swresample.h>
+#include <libavutil/opt.h>
+#include <libavutil/audio_fifo.h>
+#include <libavutil/channel_layout.h>
+}
 
 namespace vr {
 
@@ -25,8 +25,7 @@ namespace vr {
 // ---------------------------------------------------------------------------
 
 AudioRecorder::AudioRecorder() {
-    // TODO: avdevice_register_all();
-    //       — needed once per process so FFmpeg can find AVFoundation.
+    avdevice_register_all();
 }
 
 AudioRecorder::~AudioRecorder() {
@@ -58,24 +57,22 @@ bool AudioRecorder::start_recording(const std::string& output_dir,
     // Ensure output directory exists.
     std::filesystem::create_directories(output_dir_);
 
-    // TODO: Open AVFoundation capture device via FFmpeg.
-    //
-    //   const AVInputFormat* avfoundation = av_find_input_format("avfoundation");
-    //   if (!avfoundation) return false;
-    //
-    //   AVDictionary* options = nullptr;
-    //   // "none:default" = no video, default audio device
-    //   av_dict_set(&options, "sample_rate", "44100", 0);
-    //   av_dict_set(&options, "channels",    "1",     0);
-    //
-    //   AVFormatContext* ifmt_ctx = nullptr;
-    //   int ret = avformat_open_input(&ifmt_ctx, ":default", avfoundation, &options);
-    //   if (ret < 0) return false;
-    //
-    //   ret = avformat_find_stream_info(ifmt_ctx, nullptr);
-    //   if (ret < 0) { avformat_close_input(&ifmt_ctx); return false; }
-    //
-    //   fmt_ctx_in_ = ifmt_ctx;
+    const AVInputFormat* avfoundation = av_find_input_format("avfoundation");
+    if (!avfoundation) return false;
+
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "sample_rate", std::to_string(kSampleRate).c_str(), 0);
+    av_dict_set(&options, "channels", std::to_string(kChannels).c_str(), 0);
+
+    AVFormatContext* ifmt_ctx = nullptr;
+    int ret = avformat_open_input(&ifmt_ctx, ":default", avfoundation, &options);
+    av_dict_free(&options);
+    if (ret < 0) return false;
+
+    ret = avformat_find_stream_info(ifmt_ctx, nullptr);
+    if (ret < 0) { avformat_close_input(&ifmt_ctx); return false; }
+
+    fmt_ctx_in_ = ifmt_ctx;
 
     // Open the first output chunk.
     if (!open_new_chunk()) {
@@ -110,12 +107,14 @@ std::string AudioRecorder::stop_recording() {
 
     std::string last_path = current_chunk_path_;
 
-    // TODO: Close the capture device.
-    //
-    //   if (fmt_ctx_in_) {
-    //       avformat_close_input(reinterpret_cast<AVFormatContext**>(&fmt_ctx_in_));
-    //       fmt_ctx_in_ = nullptr;
-    //   }
+    if (fmt_ctx_in_) {
+        avformat_close_input(reinterpret_cast<AVFormatContext**>(&fmt_ctx_in_));
+        fmt_ctx_in_ = nullptr;
+    }
+    if (swr_ctx_) {
+        swr_free(reinterpret_cast<SwrContext**>(&swr_ctx_));
+        swr_ctx_ = nullptr;
+    }
 
     current_level_.store(0.0f);
     return last_path;
@@ -147,37 +146,71 @@ void AudioRecorder::recording_loop() {
     auto chunk_start = Clock::now();
 
     while (recording_.load()) {
-        // TODO: Read one frame from the capture device.
-        //
-        //   AVPacket pkt;
-        //   av_init_packet(&pkt);
-        //   int ret = av_read_frame(
-        //       reinterpret_cast<AVFormatContext*>(fmt_ctx_in_), &pkt);
-        //   if (ret < 0) break;
-        //
-        //   // Decode the raw PCM from the capture device.
-        //   AVFrame* frame = av_frame_alloc();
-        //   int got_frame = 0;
-        //   avcodec_send_packet(
-        //       reinterpret_cast<AVCodecContext*>(codec_ctx_), &pkt);
-        //   avcodec_receive_frame(
-        //       reinterpret_cast<AVCodecContext*>(codec_ctx_), frame);
-        //
-        //   // Compute metering from the decoded PCM samples.
-        //   float level = compute_rms(
-        //       reinterpret_cast<const float*>(frame->data[0]),
-        //       frame->nb_samples);
-        //   current_level_.store(level);
-        //   if (meter_cb_) meter_cb_(level);
-        //
-        //   // Encode to AAC and write to the current M4A chunk.
-        //   // ... (encode frame, write packet to fmt_ctx_out_) ...
-        //
-        //   av_frame_free(&frame);
-        //   av_packet_unref(&pkt);
+        AVFormatContext* ifmt = reinterpret_cast<AVFormatContext*>(fmt_ctx_in_);
+        AVPacket* pkt = av_packet_alloc();
+        if (!pkt) break;
 
-        // STUB: sleep to avoid busy-loop.
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        int ret = av_read_frame(ifmt, pkt);
+        if (ret < 0) {
+            av_packet_free(&pkt);
+            if (ret == AVERROR_EOF) break;
+            continue;
+        }
+
+        // Get the raw audio data from the packet (AVFoundation gives us PCM directly)
+        if (pkt->data && pkt->size > 0) {
+            // Compute metering from raw PCM samples
+            int sample_count = pkt->size / sizeof(float);
+            if (sample_count > 0) {
+                float level = compute_rms(reinterpret_cast<const float*>(pkt->data), sample_count);
+                current_level_.store(level);
+                if (meter_cb_) meter_cb_(level);
+            }
+
+            // Write the raw packet to the output M4A file
+            AVFormatContext* ofmt = reinterpret_cast<AVFormatContext*>(fmt_ctx_out_);
+            if (ofmt) {
+                AVPacket* out_pkt = av_packet_alloc();
+                if (out_pkt) {
+                    // Re-encode from PCM to AAC
+                    AVCodecContext* enc = reinterpret_cast<AVCodecContext*>(codec_ctx_);
+                    if (enc) {
+                        AVFrame* frame = av_frame_alloc();
+                        frame->nb_samples = pkt->size / (sizeof(float) * kChannels);
+                        frame->format = AV_SAMPLE_FMT_FLT;
+                        frame->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+                        frame->sample_rate = kSampleRate;
+                        av_frame_get_buffer(frame, 0);
+                        memcpy(frame->data[0], pkt->data, pkt->size);
+
+                        // Convert sample format if needed (PCM float -> AAC expects FLTP)
+                        SwrContext* swr = reinterpret_cast<SwrContext*>(swr_ctx_);
+                        if (swr) {
+                            AVFrame* converted = av_frame_alloc();
+                            converted->nb_samples = frame->nb_samples;
+                            converted->format = AV_SAMPLE_FMT_FLTP;
+                            converted->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+                            converted->sample_rate = kSampleRate;
+                            av_frame_get_buffer(converted, 0);
+                            swr_convert(swr,
+                                        converted->extended_data, converted->nb_samples,
+                                        (const uint8_t**)frame->extended_data, frame->nb_samples);
+                            av_frame_free(&frame);
+                            frame = converted;
+                        }
+
+                        avcodec_send_frame(enc, frame);
+                        while (avcodec_receive_packet(enc, out_pkt) == 0) {
+                            out_pkt->stream_index = 0;
+                            av_interleaved_write_frame(ofmt, out_pkt);
+                        }
+                        av_frame_free(&frame);
+                    }
+                    av_packet_free(&out_pkt);
+                }
+            }
+        }
+        av_packet_free(&pkt);
 
         // Check if we've hit the 35-second burst boundary.
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
@@ -201,36 +234,51 @@ bool AudioRecorder::open_new_chunk() {
     current_chunk_path_ = output_dir_ + "/" + session_id_
                           + "_chunk_" + std::to_string(chunk_index_) + ".m4a";
 
-    // TODO: Open an M4A/AAC output file with FFmpeg.
-    //
-    //   AVFormatContext* ofmt_ctx = nullptr;
-    //   int ret = avformat_alloc_output_context2(
-    //       &ofmt_ctx, nullptr, "ipod", current_chunk_path_.c_str());
-    //   if (ret < 0 || !ofmt_ctx) return false;
-    //
-    //   // Find AAC encoder.
-    //   const AVCodec* aac_codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
-    //   if (!aac_codec) { avformat_free_context(ofmt_ctx); return false; }
-    //
-    //   AVStream* out_stream = avformat_new_stream(ofmt_ctx, aac_codec);
-    //   AVCodecContext* enc_ctx = avcodec_alloc_context3(aac_codec);
-    //   enc_ctx->sample_rate    = kSampleRate;
-    //   enc_ctx->channels       = kChannels;
-    //   enc_ctx->channel_layout = AV_CH_LAYOUT_MONO;
-    //   enc_ctx->sample_fmt     = AV_SAMPLE_FMT_FLTP;
-    //   enc_ctx->bit_rate       = 128000;
-    //
-    //   if (ofmt_ctx->oformat->flags & AVFMT_GLOBALHEADER)
-    //       enc_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    //
-    //   avcodec_open2(enc_ctx, aac_codec, nullptr);
-    //   avcodec_parameters_from_context(out_stream->codecpar, enc_ctx);
-    //
-    //   avio_open(&ofmt_ctx->pb, current_chunk_path_.c_str(), AVIO_FLAG_WRITE);
-    //   avformat_write_header(ofmt_ctx, nullptr);
-    //
-    //   fmt_ctx_out_ = ofmt_ctx;
-    //   codec_ctx_   = enc_ctx;
+    AVFormatContext* ofmt_ctx = nullptr;
+    int ret = avformat_alloc_output_context2(&ofmt_ctx, nullptr, "ipod", current_chunk_path_.c_str());
+    if (ret < 0 || !ofmt_ctx) return false;
+
+    const AVCodec* aac_codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
+    if (!aac_codec) { avformat_free_context(ofmt_ctx); return false; }
+
+    AVStream* out_stream = avformat_new_stream(ofmt_ctx, aac_codec);
+    AVCodecContext* enc_ctx = avcodec_alloc_context3(aac_codec);
+    enc_ctx->sample_rate = kSampleRate;
+    enc_ctx->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    enc_ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
+    enc_ctx->bit_rate = 128000;
+
+    if (ofmt_ctx->oformat->flags & AVFMT_GLOBALHEADER)
+        enc_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+    ret = avcodec_open2(enc_ctx, aac_codec, nullptr);
+    if (ret < 0) {
+        avcodec_free_context(&enc_ctx);
+        avformat_free_context(ofmt_ctx);
+        return false;
+    }
+    avcodec_parameters_from_context(out_stream->codecpar, enc_ctx);
+    out_stream->time_base = (AVRational){1, kSampleRate};
+
+    ret = avio_open(&ofmt_ctx->pb, current_chunk_path_.c_str(), AVIO_FLAG_WRITE);
+    if (ret < 0) {
+        avcodec_free_context(&enc_ctx);
+        avformat_free_context(ofmt_ctx);
+        return false;
+    }
+    avformat_write_header(ofmt_ctx, nullptr);
+
+    // Set up sample format converter (PCM float interleaved -> float planar for AAC)
+    SwrContext* swr = nullptr;
+    ret = swr_alloc_set_opts2(&swr,
+        &enc_ctx->ch_layout, AV_SAMPLE_FMT_FLTP, kSampleRate,
+        &enc_ctx->ch_layout, AV_SAMPLE_FMT_FLT, kSampleRate,
+        0, nullptr);
+    if (ret >= 0) swr_init(swr);
+
+    fmt_ctx_out_ = ofmt_ctx;
+    codec_ctx_ = enc_ctx;
+    swr_ctx_ = swr;
 
     return true;
 }
@@ -244,20 +292,35 @@ void AudioRecorder::finalize_chunk() {
         return;
     }
 
-    // TODO: Write trailer and close the output file.
-    //
-    //   if (fmt_ctx_out_) {
-    //       AVFormatContext* ofmt = reinterpret_cast<AVFormatContext*>(fmt_ctx_out_);
-    //       av_write_trailer(ofmt);
-    //       avio_closep(&ofmt->pb);
-    //       avformat_free_context(ofmt);
-    //       fmt_ctx_out_ = nullptr;
-    //   }
-    //   if (codec_ctx_) {
-    //       avcodec_free_context(
-    //           reinterpret_cast<AVCodecContext**>(&codec_ctx_));
-    //       codec_ctx_ = nullptr;
-    //   }
+    if (fmt_ctx_out_) {
+        // Flush encoder
+        AVCodecContext* enc = reinterpret_cast<AVCodecContext*>(codec_ctx_);
+        if (enc) {
+            avcodec_send_frame(enc, nullptr);
+            AVPacket* pkt = av_packet_alloc();
+            while (avcodec_receive_packet(enc, pkt) == 0) {
+                pkt->stream_index = 0;
+                av_interleaved_write_frame(reinterpret_cast<AVFormatContext*>(fmt_ctx_out_), pkt);
+            }
+            av_packet_free(&pkt);
+        }
+
+        AVFormatContext* ofmt = reinterpret_cast<AVFormatContext*>(fmt_ctx_out_);
+        av_write_trailer(ofmt);
+        avio_closep(&ofmt->pb);
+        avformat_free_context(ofmt);
+        fmt_ctx_out_ = nullptr;
+    }
+    if (codec_ctx_) {
+        AVCodecContext* enc = reinterpret_cast<AVCodecContext*>(codec_ctx_);
+        avcodec_free_context(&enc);
+        codec_ctx_ = nullptr;
+    }
+    if (swr_ctx_) {
+        SwrContext* swr = reinterpret_cast<SwrContext*>(swr_ctx_);
+        swr_free(&swr);
+        swr_ctx_ = nullptr;
+    }
 
     // Read the finalized chunk file from disk and fire the burst callback.
     if (burst_cb_ && std::filesystem::exists(current_chunk_path_)) {

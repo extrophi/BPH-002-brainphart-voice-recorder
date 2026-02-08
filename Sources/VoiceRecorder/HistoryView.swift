@@ -13,6 +13,7 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import VoiceRecorderBridge
 
 // MARK: - HistoryView
 
@@ -330,14 +331,13 @@ private struct SessionRow: View {
     }
 
     private func startPlayback() {
-        guard let audioPath = appState.storageBridge.getAudioForSession(session.sessionId) else {
+        guard let audioData = appState.storageBridge.getAudioForSession(session.sessionId) else {
             log.warning("No audio found for session \(session.sessionId)")
             return
         }
 
-        let url = URL(fileURLWithPath: audioPath)
         do {
-            let player = try AVAudioPlayer(contentsOf: url)
+            let player = try AVAudioPlayer(data: audioData as Data)
             player.delegate = PlaybackDelegate.shared
             PlaybackDelegate.shared.onFinish = { [self] in
                 self.isPlaying = false

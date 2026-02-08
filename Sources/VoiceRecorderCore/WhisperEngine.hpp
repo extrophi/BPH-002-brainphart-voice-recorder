@@ -6,6 +6,9 @@
 #include <string>
 #include <vector>
 
+// Forward-declare in global namespace to match whisper.h
+struct whisper_context;
+
 namespace vr {
 
 /// Thin wrapper around whisper.cpp's C API.
@@ -42,7 +45,7 @@ private:
     std::vector<float> resample_to_16k(const std::vector<float>& input,
                                        int in_rate) const;
 
-    struct whisper_context* ctx_ = nullptr;   // opaque whisper.h handle
+    ::whisper_context* ctx_ = nullptr;   // opaque whisper.h handle
     mutable std::mutex      mu_;
 };
 

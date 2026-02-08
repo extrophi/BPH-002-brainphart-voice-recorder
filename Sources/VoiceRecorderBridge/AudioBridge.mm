@@ -57,38 +57,38 @@ typedef NS_ENUM(NSInteger, AudioBridgeErrorCode) {
 // ---- Recording lifecycle --------------------------------------------------
 
 - (void)startRecording {
-    // Generate a new UUID for this session.
     NSString *sessionId = [[NSUUID UUID] UUIDString];
     self.currentSessionId = sessionId;
 
-    // Build the file path inside the temporary directory.
-    // AudioRecorder will write chunks as <basePath>_chunk_<N>.m4a
     NSString *tempDir = NSTemporaryDirectory();
-    NSString *basePath = [tempDir stringByAppendingPathComponent:
-                          [NSString stringWithFormat:@"vr_%@", sessionId]];
+    NSString *sessionDir = [tempDir stringByAppendingPathComponent:
+                            [NSString stringWithFormat:@"vr_%@", sessionId]];
 
-    // Capture a weak reference so the burst callback doesn't create a retain cycle.
-    __weak typeof(self) weakSelf = self;
+    // Create the session directory.
+    [[NSFileManager defaultManager] createDirectoryAtPath:sessionDir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+
+    __weak AudioBridge *weakSelf = self;
 
     dispatch_async(_recorderQueue, ^{
-        __strong typeof(weakSelf) strongSelf = weakSelf;
+        __strong AudioBridge *strongSelf = weakSelf;
         if (!strongSelf) return;
 
         try {
-            std::string path = std::string([basePath UTF8String]);
+            std::string dir = std::string([sessionDir UTF8String]);
+            std::string sid = std::string([sessionId UTF8String]);
 
-            // Register the burst callback so AudioRecorder tells us about
-            // every 35-second chunk.
-            strongSelf->_recorder->set_burst_callback([weakSelf](const vr::AudioChunk &chunk) {
-                __strong typeof(weakSelf) innerSelf = weakSelf;
+            // Build burst callback.
+            vr::BurstCallback burst_cb = [weakSelf](const vr::AudioChunk &chunk) {
+                __strong AudioBridge *innerSelf = weakSelf;
                 if (!innerSelf) return;
 
-                // Convert the raw bytes to NSData (copies once).
                 NSData *audioData = [[NSData alloc] initWithBytes:chunk.audio_data.data()
                                                            length:chunk.audio_data.size()];
                 NSInteger idx = static_cast<NSInteger>(chunk.chunk_index);
 
-                // Deliver on the main queue.
                 if (innerSelf.onChunkComplete) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                         if (innerSelf.onChunkComplete) {
@@ -96,21 +96,26 @@ typedef NS_ENUM(NSInteger, AudioBridgeErrorCode) {
                         }
                     });
                 }
-            });
+            };
 
-            strongSelf->_recorder->start_recording(path);
+            // Build metering callback.
+            vr::MeteringCallback meter_cb = [weakSelf](float level) {
+                // metering is polled via currentMeteringLevel, no need to dispatch
+            };
+
+            bool ok = strongSelf->_recorder->start_recording(dir, sid,
+                                                              std::move(burst_cb),
+                                                              std::move(meter_cb));
 
             dispatch_async(dispatch_get_main_queue(), ^{
-                strongSelf.isRecording = YES;
+                strongSelf.isRecording = ok;
             });
 
         } catch (const std::exception &e) {
             NSLog(@"[AudioBridge] startRecording exception: %s", e.what());
             dispatch_async(dispatch_get_main_queue(), ^{
-                __strong typeof(weakSelf) s = weakSelf;
-                if (s) {
-                    s.isRecording = NO;
-                }
+                __strong AudioBridge *s = weakSelf;
+                if (s) s.isRecording = NO;
             });
         }
     });
@@ -136,10 +141,10 @@ typedef NS_ENUM(NSInteger, AudioBridgeErrorCode) {
 
     NSString *sessionId = self.currentSessionId;
 
-    __weak typeof(self) weakSelf = self;
+    __weak AudioBridge *weakSelf = self;
 
     dispatch_async(_recorderQueue, ^{
-        __strong typeof(weakSelf) strongSelf = weakSelf;
+        __strong AudioBridge *strongSelf = weakSelf;
         if (!strongSelf) return;
 
         try {

@@ -4,18 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 
-// TODO: #include "whisper.h"   — provided by the whisper.cpp dependency at build time.
-// For now we forward-declare the minimal surface we use so the file compiles in
-// isolation.  The real whisper.h will replace these at link time.
-//
-// struct whisper_context;
-// struct whisper_full_params;
-// whisper_context* whisper_init_from_file_with_params(const char*, whisper_context_params);
-// void             whisper_free(whisper_context*);
-// whisper_full_params whisper_full_default_params(int);
-// int              whisper_full(whisper_context*, whisper_full_params, const float*, int);
-// int              whisper_full_n_segments(whisper_context*);
-// const char*      whisper_full_get_segment_text(whisper_context*, int);
+#include "whisper.h"
 
 namespace vr {
 
@@ -28,7 +17,7 @@ WhisperEngine::WhisperEngine() = default;
 WhisperEngine::~WhisperEngine() {
     std::lock_guard<std::mutex> lock(mu_);
     if (ctx_) {
-        // TODO: whisper_free(ctx_);
+        whisper_free(ctx_);
         ctx_ = nullptr;
     }
 }
@@ -44,7 +33,7 @@ WhisperEngine& WhisperEngine::operator=(WhisperEngine&& other) noexcept {
         std::lock_guard<std::mutex> lk1(mu_);
         std::lock_guard<std::mutex> lk2(other.mu_);
         if (ctx_) {
-            // TODO: whisper_free(ctx_);
+            whisper_free(ctx_);
         }
         ctx_ = other.ctx_;
         other.ctx_ = nullptr;
@@ -60,26 +49,18 @@ bool WhisperEngine::init(const std::string& model_path) {
     std::lock_guard<std::mutex> lock(mu_);
 
     if (ctx_) {
-        // TODO: whisper_free(ctx_);
+        whisper_free(ctx_);
         ctx_ = nullptr;
     }
 
-    // TODO: Real implementation:
-    //
-    //   struct whisper_context_params cparams = whisper_context_default_params();
-    //   cparams.use_gpu = true;   // Enable Metal on Apple Silicon
-    //
-    //   ctx_ = whisper_init_from_file_with_params(model_path.c_str(), cparams);
-    //   if (!ctx_) {
-    //       return false;
-    //   }
-    //   return true;
+    struct whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = true;  // Metal on Apple Silicon
 
-    // STUB: pretend we loaded the model.
-    (void)model_path;
-    // ctx_ remains nullptr — is_loaded() will return false until real whisper
-    // is linked.  Set to non-null for testing if desired.
-    return false;
+    ctx_ = whisper_init_from_file_with_params(model_path.c_str(), cparams);
+    if (!ctx_) {
+        return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,51 +97,45 @@ std::string WhisperEngine::transcribe(const std::vector<float>& audio_data,
         return "";
     }
 
-    // TODO: Real implementation:
-    //
-    //   // Configure whisper parameters.
-    //   whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    //   params.print_progress   = false;
-    //   params.print_timestamps = false;
-    //   params.single_segment   = false;
-    //   params.language         = "en";
-    //   params.n_threads        = 4;
-    //
-    //   // Wire up progress callback.
-    //   struct CallbackCtx { ProgressCallback cb; };
-    //   CallbackCtx cb_ctx{progress};
-    //   params.progress_callback = [](whisper_context* /*ctx*/,
-    //                                 whisper_state*  /*state*/,
-    //                                 int              progress_pct,
-    //                                 void*            user_data) {
-    //       auto* c = static_cast<CallbackCtx*>(user_data);
-    //       if (c->cb) {
-    //           c->cb(static_cast<float>(progress_pct) / 100.0f);
-    //       }
-    //   };
-    //   params.progress_callback_user_data = &cb_ctx;
-    //
-    //   // Run inference.
-    //   int ret = whisper_full(ctx_, params, pcm16k.data(),
-    //                          static_cast<int>(pcm16k.size()));
-    //   if (ret != 0) {
-    //       return "";
-    //   }
-    //
-    //   // Collect segments.
-    //   std::string result;
-    //   int n_segments = whisper_full_n_segments(ctx_);
-    //   for (int i = 0; i < n_segments; ++i) {
-    //       const char* text = whisper_full_get_segment_text(ctx_, i);
-    //       if (text) {
-    //           result += text;
-    //       }
-    //   }
-    //   return result;
+    // Configure whisper parameters
+    whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.print_progress   = false;
+    params.print_timestamps = false;
+    params.single_segment   = false;
+    params.language         = "en";
+    params.n_threads        = 4;
 
-    // STUB
-    (void)progress;
-    return "";
+    // Wire up progress callback
+    struct CallbackCtx { ProgressCallback cb; };
+    CallbackCtx cb_ctx{progress};
+    params.progress_callback = [](struct whisper_context* /*ctx*/,
+                                  struct whisper_state* /*state*/,
+                                  int progress_pct,
+                                  void* user_data) {
+        auto* c = static_cast<CallbackCtx*>(user_data);
+        if (c->cb) {
+            c->cb(static_cast<float>(progress_pct) / 100.0f);
+        }
+    };
+    params.progress_callback_user_data = &cb_ctx;
+
+    // Run inference
+    int ret = whisper_full(ctx_, params, pcm16k.data(),
+                           static_cast<int>(pcm16k.size()));
+    if (ret != 0) {
+        return "";
+    }
+
+    // Collect segments
+    std::string result;
+    int n_segments = whisper_full_n_segments(ctx_);
+    for (int i = 0; i < n_segments; ++i) {
+        const char* text = whisper_full_get_segment_text(ctx_, i);
+        if (text) {
+            result += text;
+        }
+    }
+    return result;
 }
 
 // ---------------------------------------------------------------------------
