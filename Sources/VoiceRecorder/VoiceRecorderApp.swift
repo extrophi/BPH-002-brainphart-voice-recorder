@@ -72,12 +72,27 @@ struct VoiceRecorderApp: App {
 
     /// On launch, any session left in "recording" status is orphaned (the app
     /// crashed or was force-quit). Re-process them so no audio is lost.
+    /// Very short recordings (< 1s) are silently deleted — they can't produce
+    /// meaningful transcriptions and would otherwise show confusing empty results.
     private func recoverOrphanedSessions() {
         let orphaned = appState.storageBridge.getOrphanedSessions()
         guard let sessions = orphaned as? [VRSession], !sessions.isEmpty else { return }
 
         log.info("Recovering \(sessions.count) orphaned session(s)...")
         for session in sessions {
+            // Check audio duration before attempting transcription.
+            let pcmData = appState.storageBridge.getAudioForSession(session.sessionId)
+            let byteCount = pcmData?.count ?? 0
+            let sampleCount = byteCount / MemoryLayout<Float>.size
+            let durationSeconds = Float(sampleCount) / Float(Config.transcriptionSampleRate)
+
+            if durationSeconds < Config.minimumTranscriptionDuration {
+                log.info("Orphaned session \(session.sessionId) too short (\(String(format: "%.1f", durationSeconds))s) — deleting")
+                appState.deleteSession(sessionId: session.sessionId)
+                continue
+            }
+
+            log.info("Orphaned session \(session.sessionId): \(String(format: "%.1f", durationSeconds))s — attempting transcription")
             appState.retryTranscription(sessionId: session.sessionId)
         }
     }

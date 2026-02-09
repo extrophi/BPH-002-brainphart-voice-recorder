@@ -258,9 +258,10 @@ final class AppState {
         let durationSeconds = Float(sampleCount) / Float(Config.transcriptionSampleRate)
         log.info("Transcribing session \(sessionId): \(pcmData.count) bytes, \(sampleCount) samples, ~\(String(format: "%.1f", durationSeconds))s of audio")
 
-        if durationSeconds < 0.1 {
-            setError("Audio too short (\(String(format: "%.1f", durationSeconds))s) — cannot transcribe")
+        if durationSeconds < Config.minimumTranscriptionDuration {
+            log.warning("Audio too short for transcription: \(String(format: "%.1f", durationSeconds))s (\(sampleCount) samples) — skipping")
             isTranscribing = false
+            activeSessionId = nil
             loadSessions()
             return
         }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 #include "whisper.h"
@@ -119,10 +120,16 @@ std::string WhisperEngine::transcribe(const std::vector<float>& audio_data,
     };
     params.progress_callback_user_data = &cb_ctx;
 
+    // Diagnostic logging
+    float duration_sec = static_cast<float>(pcm16k.size()) / 16000.0f;
+    fprintf(stderr, "[WhisperEngine] transcribe: %zu samples, %.2fs duration, sampleRate=%d\n",
+            pcm16k.size(), duration_sec, sample_rate);
+
     // Run inference
     int ret = whisper_full(ctx_, params, pcm16k.data(),
                            static_cast<int>(pcm16k.size()));
     if (ret != 0) {
+        fprintf(stderr, "[WhisperEngine] whisper_full() FAILED with code %d\n", ret);
         throw std::runtime_error("whisper_full() returned error code " + std::to_string(ret));
     }
 
@@ -135,6 +142,16 @@ std::string WhisperEngine::transcribe(const std::vector<float>& audio_data,
             result += text;
         }
     }
+
+    // Diagnostic: log segment count and result preview
+    fprintf(stderr, "[WhisperEngine] transcribe done: %d segments, result length=%zu",
+            n_segments, result.size());
+    if (!result.empty()) {
+        std::string preview = result.substr(0, 20);
+        fprintf(stderr, ", preview=\"%s%s\"", preview.c_str(), result.size() > 20 ? "..." : "");
+    }
+    fprintf(stderr, "\n");
+
     return result;
 }
 

@@ -106,6 +106,10 @@ enum Config {
     /// Transcription sample rate (whisper.cpp requirement).
     static let transcriptionSampleRate: Int = 16000
 
+    /// Minimum audio duration (seconds) required for transcription.
+    /// Whisper produces 0 segments for very short audio (< ~1s), so skip those.
+    static let minimumTranscriptionDuration: Float = 1.0
+
     /// Maximum burst length in seconds before flushing to disk.
     static let burstLengthSeconds: Int = 35
 
