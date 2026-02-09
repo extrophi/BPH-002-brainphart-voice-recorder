@@ -42,6 +42,9 @@ if [ -f "${ICON_PATH}" ]; then
     cp "${ICON_PATH}" "${APP_BUNDLE}/Contents/Resources/AppIcon.png"
 fi
 
+# Add Applications symlink for drag-and-drop install
+ln -sf /Applications "${DMG_DIR}/Applications"
+
 # Create Info.plist
 cat > "${APP_BUNDLE}/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -76,13 +79,49 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << 'PLIST'
 </plist>
 PLIST
 
-# Create DMG
-rm -f "${DMG_OUTPUT}"
+# Create DMG (read-write first, then convert to compressed)
+rm -f "${DMG_OUTPUT}" "${DMG_OUTPUT%.dmg}-rw.dmg"
 echo "Packaging DMG..."
+
+# Create read-write DMG so we can style it
 hdiutil create -volname "${DISPLAY_NAME}" \
     -srcfolder "${DMG_DIR}" \
-    -ov -format UDZO \
-    "${DMG_OUTPUT}"
+    -ov -format UDRW \
+    "${DMG_OUTPUT%.dmg}-rw.dmg"
+
+# Mount it, style the window, then eject
+MOUNT_DIR="/Volumes/${DISPLAY_NAME}"
+hdiutil attach "${DMG_OUTPUT%.dmg}-rw.dmg" -mountpoint "${MOUNT_DIR}" -nobrowse
+if [ -d "${MOUNT_DIR}" ]; then
+    osascript <<APPLESCRIPT
+tell application "Finder"
+    tell disk "${DISPLAY_NAME}"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set bounds of container window to {200, 200, 660, 460}
+        set theViewOptions to icon view options of container window
+        set arrangement of theViewOptions to not arranged
+        set icon size of theViewOptions to 80
+        set position of item "${DISPLAY_NAME}.app" of container window to {120, 120}
+        set position of item "Applications" of container window to {340, 120}
+        close
+        open
+        update without registering applications
+        delay 1
+        close
+    end tell
+end tell
+APPLESCRIPT
+    sync
+    hdiutil detach "${MOUNT_DIR}"
+fi
+
+# Convert to compressed read-only DMG
+hdiutil convert "${DMG_OUTPUT%.dmg}-rw.dmg" \
+    -format UDZO -o "${DMG_OUTPUT}"
+rm -f "${DMG_OUTPUT%.dmg}-rw.dmg"
 
 DMG_SIZE=$(stat -f%z "${DMG_OUTPUT}" 2>/dev/null || stat -c%s "${DMG_OUTPUT}" 2>/dev/null)
 DMG_SIZE_MB=$((DMG_SIZE / 1048576))

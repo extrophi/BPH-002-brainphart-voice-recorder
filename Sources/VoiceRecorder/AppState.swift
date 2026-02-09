@@ -207,6 +207,27 @@ final class AppState {
         transcribeActiveSession()
     }
 
+    /// Cancel the current recording without transcribing.
+    /// Used by push-to-talk mode when the key press was too short.
+    func cancelRecording() {
+        guard isRecording else { return }
+
+        _ = audioManager.stopRecording()
+
+        isRecording = false
+        stopMeteringPolling()
+        stopElapsedTimer()
+        currentMeteringLevel = 0
+        meteringSamples = Array(repeating: 0, count: Config.meteringSampleCount)
+
+        if let sid = activeSessionId {
+            log.info("Cancelling recording — deleting session \(sid)")
+            storageBridge.deleteSession(sid)
+            activeSessionId = nil
+            loadSessions()
+        }
+    }
+
     /// Toggle between recording and stopped.
     func toggleRecording() {
         if isRecording {
@@ -332,10 +353,10 @@ final class AppState {
                 guard let self, self.isRecording else { return }
                 let rawLevel = self.audioManager.getMeteringLevel()
 
-                // Amplify the metering level dramatically.
+                // Amplify the metering level for visual display.
                 // Raw RMS levels are typically 0.0-0.1 for normal speech.
-                // Use aggressive power curve + high multiplier so bars FILL during speech.
-                let amplified = min(pow(rawLevel, 0.3) * 5.0, 1.0)
+                // Moderate curve so bars show dynamic variation, not a solid block.
+                let amplified = min(pow(rawLevel, 0.5) * 2.0, 1.0)
 
                 self.currentMeteringLevel = amplified
 

@@ -51,12 +51,30 @@ final class FloatingPanelController: NSWindowController {
         // Large enough for all states (idle/recording/transcribing/error).
         panel.setContentSize(NSSize(width: 420, height: 100))
 
-        // Nudge to upper-right quadrant of the screen.
-        if let screen = NSScreen.main {
+        // Restore saved position or default to upper-right quadrant.
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "pillPositionX") != nil,
+           defaults.object(forKey: "pillPositionY") != nil {
+            let x = defaults.double(forKey: "pillPositionX")
+            let y = defaults.double(forKey: "pillPositionY")
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        } else if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
             let x = screenFrame.maxX - 300
             let y = screenFrame.maxY - 100
             panel.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+
+        // Persist position whenever the panel is dragged.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification,
+            object: panel,
+            queue: .main
+        ) { notification in
+            guard let window = notification.object as? NSWindow else { return }
+            let origin = window.frame.origin
+            UserDefaults.standard.set(origin.x, forKey: "pillPositionX")
+            UserDefaults.standard.set(origin.y, forKey: "pillPositionY")
         }
     }
 
@@ -136,7 +154,23 @@ struct FloatingOverlayContent: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background {
+                if #available(macOS 26, *) {
+                    Capsule()
+                        .glassEffect(.regular.interactive(), in: .capsule)
+                } else {
+                    Capsule()
+                        .fill(.ultraThinMaterial)
+                }
+            }
+            .overlay {
+                if appState.isRecording {
+                    Capsule()
+                        .strokeBorder(.red.opacity(0.6), lineWidth: 2)
+                        .blur(radius: 8)
+                        .modifier(PulsingModifier())
+                }
+            }
             .fixedSize()
         }
         // Animate layout transitions smoothly.
@@ -186,7 +220,7 @@ struct FloatingOverlayContent: View {
                     .foregroundStyle(.tertiary)
             }
 
-            Text("Cmd+Shift+R")
+            Text("⌥⇧R")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundStyle(.tertiary)
         }

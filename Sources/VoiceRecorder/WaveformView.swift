@@ -32,13 +32,20 @@ struct WaveformView: View {
     var minimumBarHeight: CGFloat = 0.02
 
     var body: some View {
+        // Smooth samples with a 3-point moving average for cleaner bars.
+        let smoothed: [Float] = samples.indices.map { i in
+            let lo = max(0, i - 1)
+            let hi = min(samples.count - 1, i + 1)
+            return (samples[lo] + samples[i] + samples[hi]) / 3.0
+        }
+
         Canvas { context, size in
             let totalSpacing = barSpacing * CGFloat(barCount - 1)
             let barWidth = max(1, (size.width - totalSpacing) / CGFloat(barCount))
 
             for i in 0..<barCount {
-                let sampleIndex = mapIndex(barIndex: i, barCount: barCount, sampleCount: samples.count)
-                let amplitude = CGFloat(clamp(samples[sampleIndex]))
+                let sampleIndex = mapIndex(barIndex: i, barCount: barCount, sampleCount: smoothed.count)
+                let amplitude = CGFloat(clamp(smoothed[sampleIndex]))
                 let height = max(size.height * minimumBarHeight,
                                  size.height * amplitude)
                 let x = CGFloat(i) * (barWidth + barSpacing)

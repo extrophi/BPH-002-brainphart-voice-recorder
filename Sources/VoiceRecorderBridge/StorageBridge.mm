@@ -177,8 +177,8 @@ static VRSession *SessionToObjC(const vr::RecordingSession &s) {
 
     try {
         std::string sid = std::string([sessionId UTF8String]);
-        // Use update_status to mark complete.
         _db->update_status(sid, vr::RecordingStatus::complete);
+        _db->update_duration(sid, static_cast<int64_t>(durationMs));
     } catch (const std::exception &e) {
         NSLog(@"[StorageBridge] completeSession exception: %s", e.what());
     }

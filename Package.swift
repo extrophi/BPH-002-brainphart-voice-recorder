@@ -6,6 +6,9 @@ let package = Package(
     platforms: [
         .macOS(.v14)
     ],
+    dependencies: [
+        .package(url: "https://github.com/soffes/HotKey.git", from: "0.2.1"),
+    ],
     targets: [
         // C++ core — headers exposed to bridge layer
         .systemLibrary(
@@ -71,7 +74,7 @@ let package = Package(
         // SwiftUI app
         .executableTarget(
             name: "VoiceRecorder",
-            dependencies: ["VoiceRecorderBridge"],
+            dependencies: ["VoiceRecorderBridge", .product(name: "HotKey", package: "HotKey")],
             path: "Sources/VoiceRecorder",
             swiftSettings: [
                 .define("MACOS_BUILD"),

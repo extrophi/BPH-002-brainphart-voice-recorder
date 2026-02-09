@@ -26,32 +26,83 @@ enum AutoPaste {
     static func pasteText(_ text: String) {
         guard !text.isEmpty else { return }
 
-        // 1. Check accessibility permission.
-        guard ensureAccessibilityPermission() else { return }
-
-        // 2. Write text to the system pasteboard.
         let pasteboard = NSPasteboard.general
+
+        // 1. Save the user's current clipboard contents (all types).
+        let savedItems = saveClipboard(pasteboard)
+
+        // 2. Copy transcription to clipboard.
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        // 3. Brief delay to let the pasteboard write settle, then simulate
-        //    Cmd+V in the frontmost application.
+        // 3. Try to auto-paste via Cmd+V if accessibility is granted.
+        //    If not granted, the text is still on the clipboard for manual paste
+        //    — don't restore in that case, the user needs the text available.
+        guard ensureAccessibilityPermission() else { return }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             simulatePaste()
+
+            // 4. Restore original clipboard after the paste event is processed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                restoreClipboard(savedItems, to: pasteboard)
+            }
         }
+    }
+
+    // MARK: - Clipboard Save / Restore
+
+    /// Snapshot of a single pasteboard item: an ordered list of (type, data) pairs.
+    private typealias ItemSnapshot = [(NSPasteboard.PasteboardType, Data)]
+
+    /// Saves all items currently on the pasteboard as raw data.
+    /// Returns an empty array if the clipboard is empty.
+    private static func saveClipboard(_ pasteboard: NSPasteboard) -> [ItemSnapshot] {
+        guard let items = pasteboard.pasteboardItems else { return [] }
+        var snapshots: [ItemSnapshot] = []
+        for item in items {
+            var pairs: ItemSnapshot = []
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    pairs.append((type, data))
+                }
+            }
+            if !pairs.isEmpty {
+                snapshots.append(pairs)
+            }
+        }
+        return snapshots
+    }
+
+    /// Restores previously saved clipboard contents.
+    /// If `snapshots` is empty, clears the pasteboard (there was nothing to restore).
+    private static func restoreClipboard(_ snapshots: [ItemSnapshot], to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        guard !snapshots.isEmpty else { return }
+        var pbItems: [NSPasteboardItem] = []
+        for snapshot in snapshots {
+            let item = NSPasteboardItem()
+            for (type, data) in snapshot {
+                item.setData(data, forType: type)
+            }
+            pbItems.append(item)
+        }
+        pasteboard.writeObjects(pbItems)
     }
 
     // MARK: - Accessibility Check
 
+    /// Whether we've already shown the accessibility alert this launch.
+    private static var hasShownAlert = false
+
     /// Returns `true` if the process is trusted for Accessibility.
-    /// On first call (when not yet trusted) macOS may show its own prompt;
-    /// we also display an explanatory alert.
+    /// Shows an explanatory alert at most once per app launch if not trusted.
     @MainActor
     static func ensureAccessibilityPermission() -> Bool {
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
+        let trusted = AXIsProcessTrusted()
 
-        if !trusted {
+        if !trusted && !hasShownAlert {
+            hasShownAlert = true
             showAccessibilityAlert()
         }
         return trusted

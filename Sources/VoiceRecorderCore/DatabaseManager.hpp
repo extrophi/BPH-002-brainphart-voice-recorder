@@ -57,6 +57,9 @@ public:
     /// Mark a session as transcribing.
     bool update_status(const std::string& session_id, RecordingStatus status);
 
+    /// Update the duration_ms for a session.
+    bool update_duration(const std::string& session_id, int64_t duration_ms);
+
     /// Retrieve a single session by ID.
     std::optional<RecordingSession> get_session(const std::string& session_id) const;
 

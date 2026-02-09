@@ -233,6 +233,21 @@ bool DatabaseManager::update_status(const std::string& session_id,
     return true;
 }
 
+bool DatabaseManager::update_duration(const std::string& session_id,
+                                      int64_t duration_ms) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!db_) return false;
+
+    const char* sql = "UPDATE sessions SET duration_ms = ? WHERE id = ?";
+    Statement stmt(db_, sql);
+    if (!stmt.ok()) return false;
+
+    sqlite3_bind_int64(stmt, 1, duration_ms);
+    sqlite3_bind_text(stmt, 2, session_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    return sqlite3_step(stmt) == SQLITE_DONE;
+}
+
 std::optional<RecordingSession> DatabaseManager::get_session(
     const std::string& session_id) const {
     std::lock_guard<std::mutex> lock(mu_);

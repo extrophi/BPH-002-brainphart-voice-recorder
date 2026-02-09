@@ -53,6 +53,13 @@ Resources/models/*.bin
 *.swo
 *~
 
+# DMG packaging
+build/dmg/
+*.dmg
+
+# Python
+__pycache__/
+
 # Secrets
 *.env
 *.pem
