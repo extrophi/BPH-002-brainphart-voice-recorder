@@ -8,6 +8,7 @@
 //  - Idle:          Compact pill — mic icon + "Ready"
 //  - Recording:     Expanded pill — waveform + elapsed timer + stop button
 //  - Transcribing:  Progress bar + percentage
+//  - Error:         Red banner shown briefly when something fails
 //
 //  The panel is non-activating so it never steals focus from the frontmost app.
 //  Draggable by its background.
@@ -34,11 +35,21 @@ final class FloatingPanelController: NSWindowController {
                 .environment(appState)
         )
 
+        // Use a fixed transparent panel — the SwiftUI Capsule inside handles
+        // its own sizing via .fixedSize(). Do NOT use .preferredContentSize
+        // here — it causes infinite layout recursion (NSHostingView resizes
+        // panel → windowDidLayout → recalculate → resize → crash).
+        hostingView.sizingOptions = []
+
+        // Make the hosting view fully transparent — no default background
+        // that would show as black lines around the capsule shape.
+        hostingView.view.wantsLayer = true
+        hostingView.view.layer?.backgroundColor = .clear
+
         panel.contentViewController = hostingView
 
-        // Size the panel to fit the SwiftUI content.
-        panel.setContentSize(NSSize(width: 280, height: 56))
-        panel.center()
+        // Large enough for all states (idle/recording/transcribing/error).
+        panel.setContentSize(NSSize(width: 420, height: 100))
 
         // Nudge to upper-right quadrant of the screen.
         if let screen = NSScreen.main {
@@ -66,29 +77,32 @@ private final class FloatingPanel: NSPanel {
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 280, height: 56),
-            styleMask: [.borderless, .nonactivatingPanel, .hudWindow],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
         // Float above everything.
         level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-        // Transparent / rounded appearance.
+        // Fully transparent — no window chrome, no border, no outline.
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
 
         // Allow the panel to become key only when the user clicks a control
         // inside it.
         becomesKeyOnlyIfNeeded = true
 
-        // Keep on screen across space changes.
+        // Keep on screen when app deactivates — critical for a floating overlay.
         hidesOnDeactivate = false
 
         // Allow dragging.
         isMovableByWindowBackground = true
+
+        // Resize animation style.
+        animationBehavior = .utilityWindow
     }
 
     // Allow the panel to resign key when the user clicks elsewhere.
@@ -104,23 +118,55 @@ struct FloatingOverlayContent: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        Group {
-            if appState.isTranscribing {
-                transcribingView
-            } else if appState.isRecording {
-                recordingView
-            } else {
-                idleView
+        VStack(spacing: 6) {
+            // Error banner (shown above the pill when an error exists).
+            if let error = appState.errorMessage {
+                errorBanner(error)
             }
+
+            // Main pill content.
+            Group {
+                if appState.isTranscribing {
+                    transcribingView
+                } else if appState.isRecording {
+                    recordingView
+                } else {
+                    idleView
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: Capsule())
+            .fixedSize()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
-        .fixedSize()
         // Animate layout transitions smoothly.
         .animation(.easeInOut(duration: 0.25), value: appState.isRecording)
         .animation(.easeInOut(duration: 0.25), value: appState.isTranscribing)
+        .animation(.easeInOut(duration: 0.25), value: appState.errorMessage)
+    }
+
+    // MARK: - Error Banner
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.white)
+                .font(.system(size: 11))
+
+            Text(message)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.red.opacity(0.85), in: Capsule())
+        .fixedSize()
+        .onTapGesture {
+            appState.dismissError()
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     // MARK: - Idle
@@ -131,11 +177,16 @@ struct FloatingOverlayContent: View {
                 .foregroundStyle(.secondary)
                 .font(.system(size: 14, weight: .medium))
 
-            Text("Ready")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("BrainPhart Voice")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("Local privacy-first voice transcriber")
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(.tertiary)
+            }
 
-            Text("Cmd+Shift+Space")
+            Text("Cmd+Shift+R")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundStyle(.tertiary)
         }
@@ -151,13 +202,12 @@ struct FloatingOverlayContent: View {
                 .frame(width: 8, height: 8)
                 .modifier(PulsingModifier())
 
-            // Mini waveform.
-            WaveformView(
+            // Mini waveform — thin dense bars.
+            WaveformView.compact(
                 samples: appState.meteringSamples,
-                barColor: .green,
-                barCount: 24
+                color: .green
             )
-            .frame(width: 100, height: 28)
+            .frame(width: 120, height: 28)
 
             // Elapsed time.
             Text(formattedElapsed)

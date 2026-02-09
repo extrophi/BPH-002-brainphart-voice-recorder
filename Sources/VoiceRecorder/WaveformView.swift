@@ -4,12 +4,7 @@
 //
 //  Real-time waveform visualisation driven by an array of metering samples.
 //
-//  Renders vertical bars whose heights correspond to recent audio levels.
-//  The bar colour reflects the current state:
-//  - Green:  recording
-//  - Blue:   idle
-//  - Orange: transcribing
-//
+//  Renders thin vertical bars whose heights correspond to recent audio levels.
 //  Uses SwiftUI Canvas for efficient rendering and smooth animation.
 //
 
@@ -27,14 +22,14 @@ struct WaveformView: View {
 
     /// Number of visible bars. The view picks evenly-spaced samples from the
     /// input array to fill this count.
-    var barCount: Int = 40
+    var barCount: Int = 48
 
     /// Spacing between bars in points.
-    var barSpacing: CGFloat = 2
+    var barSpacing: CGFloat = 1.0
 
-    /// Minimum bar height as a fraction of the canvas height (so the waveform
-    /// never looks completely flat).
-    var minimumBarHeight: CGFloat = 0.05
+    /// Minimum bar height as a fraction of the canvas height.
+    /// Keep low so silence is near-flat and speech is dramatic.
+    var minimumBarHeight: CGFloat = 0.02
 
     var body: some View {
         Canvas { context, size in
@@ -84,24 +79,26 @@ struct WaveformView: View {
 
 extension WaveformView {
     /// A small waveform suitable for the floating overlay pill.
+    /// Thin 1pt bars, tightly packed for a professional audio look.
     static func compact(samples: [Float], color: Color) -> WaveformView {
         WaveformView(
             samples: samples,
             barColor: color,
-            barCount: 24,
-            barSpacing: 1.5,
-            minimumBarHeight: 0.08
+            barCount: 40,
+            barSpacing: 1.0,
+            minimumBarHeight: 0.01
         )
     }
 
     /// A larger waveform for the history detail view.
+    /// Dense thin bars for detailed waveform visualization.
     static func expanded(samples: [Float], color: Color) -> WaveformView {
         WaveformView(
             samples: samples,
             barColor: color,
-            barCount: 60,
-            barSpacing: 2,
-            minimumBarHeight: 0.04
+            barCount: 80,
+            barSpacing: 1.0,
+            minimumBarHeight: 0.01
         )
     }
 }
@@ -115,12 +112,12 @@ extension WaveformView {
     }
 
     VStack(spacing: 20) {
-        WaveformView(samples: fakeSamples, barColor: .green, barCount: 40)
+        WaveformView(samples: fakeSamples, barColor: .green, barCount: 48)
             .frame(width: 300, height: 60)
             .padding()
             .background(.black.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
 
-        WaveformView.compact(samples: fakeSamples, color: .blue)
+        WaveformView.compact(samples: fakeSamples, color: .green)
             .frame(width: 120, height: 30)
             .padding()
             .background(.black.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))

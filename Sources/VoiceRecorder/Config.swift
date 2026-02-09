@@ -12,8 +12,8 @@ import os.log
 // MARK: - Logging
 
 /// Unified logger for the entire app. Use instead of print() or NSLog().
-let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.voicerecorder.app",
-                 category: "VoiceRecorder")
+let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "art.brainph.voice",
+                 category: "BrainPhartVoice")
 
 // MARK: - Configuration
 
@@ -34,7 +34,7 @@ enum Config {
     /// Resolves the model path dynamically from bundle or project tree.
     /// Returns nil if model cannot be found.
     static func resolveModelPath() -> String? {
-        let candidates: [String] = [
+        var candidates: [String] = [
             // Bundled in .app/Contents/Resources/
             Bundle.main.path(forResource: whisperModelName, ofType: whisperModelExtension),
             // .app/Contents/Resources/models/
@@ -48,8 +48,36 @@ enum Config {
                 .appendingPathComponent(whisperModelFilename).path
         ].compactMap { $0 }
 
-        for path in candidates where FileManager.default.fileExists(atPath: path) {
-            return path
+        // When running from .build/release/ the executable is several levels
+        // deep inside the project. Walk up from the executable to find the
+        // project root's Resources/models/ directory.
+        let execURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+            .resolvingSymlinksInPath()
+        var dir = execURL.deletingLastPathComponent()
+        for _ in 0..<6 {
+            let candidate = dir
+                .appendingPathComponent("Resources/models")
+                .appendingPathComponent(whisperModelFilename).path
+            candidates.append(candidate)
+            dir = dir.deletingLastPathComponent()
+        }
+
+        // Also check current working directory.
+        let cwd = FileManager.default.currentDirectoryPath
+        candidates.append(cwd + "/Resources/models/" + whisperModelFilename)
+
+        log.info("Searching \(candidates.count) candidate paths for whisper model...")
+        for (i, path) in candidates.enumerated() {
+            let exists = FileManager.default.fileExists(atPath: path)
+            if exists {
+                log.info("  [\(i)] FOUND: \(path)")
+                return path
+            }
+        }
+
+        log.error("Whisper model not found after searching \(candidates.count) paths.")
+        for (i, path) in candidates.enumerated() {
+            log.error("  [\(i)] \(path)")
         }
         return nil
     }
@@ -74,9 +102,6 @@ enum Config {
     }
 
     // MARK: Audio
-
-    /// Recording sample rate (high quality, preserved in DB).
-    static let recordingSampleRate: Int = 44100
 
     /// Transcription sample rate (whisper.cpp requirement).
     static let transcriptionSampleRate: Int = 16000

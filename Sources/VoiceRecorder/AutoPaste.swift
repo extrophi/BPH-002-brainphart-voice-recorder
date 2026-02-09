@@ -90,7 +90,7 @@ enum AutoPaste {
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
         alert.informativeText = """
-            Voice Recorder needs Accessibility permission to auto-paste \
+            BrainPhart Voice needs Accessibility permission to auto-paste \
             transcriptions at your cursor.
 
             Please grant access in:

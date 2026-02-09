@@ -34,6 +34,29 @@ struct ContentView: View {
             toolbarContent
         }
         .frame(minWidth: 600, minHeight: 400)
+        .overlay(alignment: .top) {
+            // Error banner in the main window.
+            if let error = appState.errorMessage {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.white)
+                        .font(.system(size: 12))
+                    Text(error)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.red.opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
+                .padding(.top, 8)
+                .onTapGesture {
+                    appState.dismissError()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.25), value: appState.errorMessage)
+            }
+        }
         .overlay {
             if showNowOverlay {
                 nowOverlay
@@ -54,7 +77,7 @@ struct ContentView: View {
     // MARK: - Sidebar
 
     private var sidebarContent: some View {
-        HistoryView()
+        HistoryView(selectedSessionId: $selectedSessionId)
             .navigationSplitViewColumnWidth(min: 280, ideal: 320)
     }
 
@@ -185,6 +208,7 @@ struct ContentView: View {
 /// the NavigationSplitView.
 private struct SessionDetailView: View {
     let session: VRSession
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         ScrollView {
@@ -204,15 +228,33 @@ private struct SessionDetailView: View {
 
                 Divider()
 
-                // Transcript.
-                if let transcript = session.transcript, !transcript.isEmpty {
+                // Transcript content.
+                if appState.isTranscribing && appState.latestTranscript == nil {
+                    // Currently transcribing this or another session.
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Transcribing...")
+                            .font(.body)
+                            .foregroundStyle(.orange)
+                    }
+                } else if let transcript = session.transcript, !transcript.isEmpty {
                     Text(transcript)
                         .font(.body)
                         .textSelection(.enabled)
                 } else {
-                    Text("No transcript available.")
-                        .foregroundStyle(.tertiary)
-                        .italic()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("No transcript available")
+                            .foregroundStyle(.tertiary)
+                            .italic()
+
+                        Button {
+                            appState.retryTranscription(sessionId: session.sessionId)
+                        } label: {
+                            Label("Retry Transcription", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
             }
             .padding(20)

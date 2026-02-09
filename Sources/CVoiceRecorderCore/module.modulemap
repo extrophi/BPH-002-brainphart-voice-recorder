@@ -1,10 +1,8 @@
 module CVoiceRecorderCore [system] {
     header "../../Sources/VoiceRecorderCore/Types.hpp"
     header "../../Sources/VoiceRecorderCore/WhisperEngine.hpp"
-    header "../../Sources/VoiceRecorderCore/AudioRecorder.hpp"
     header "../../Sources/VoiceRecorderCore/AudioConverter.hpp"
     header "../../Sources/VoiceRecorderCore/DatabaseManager.hpp"
-    header "../../Sources/VoiceRecorderCore/StorageManager.hpp"
     link "VoiceRecorderCore"
     export *
 }

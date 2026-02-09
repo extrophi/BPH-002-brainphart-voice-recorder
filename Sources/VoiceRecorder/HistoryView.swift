@@ -20,6 +20,9 @@ import VoiceRecorderBridge
 struct HistoryView: View {
     @Environment(AppState.self) private var appState
 
+    /// Binding to the parent's selected session id for the detail pane.
+    @Binding var selectedSessionId: String?
+
     /// Search query to filter sessions by transcript content.
     @State private var searchText = ""
 
@@ -94,6 +97,8 @@ struct HistoryView: View {
             } else {
                 expandedSessionId = sessionId
             }
+            // Also drive the detail pane selection.
+            selectedSessionId = expandedSessionId
         }
     }
 
@@ -115,7 +120,7 @@ struct HistoryView: View {
                 Text("No recordings yet")
                     .font(.headline)
                     .foregroundStyle(.secondary)
-                Text("Press Cmd+Shift+Space to start recording")
+                Text("Press Cmd+Shift+R to start recording")
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
             } else {
@@ -331,23 +336,43 @@ private struct SessionRow: View {
     }
 
     private func startPlayback() {
-        guard let audioData = appState.storageBridge.getAudioForSession(session.sessionId) else {
-            log.warning("No audio found for session \(session.sessionId)")
+        guard let pcmData = appState.storageBridge.getAudioForSession(session.sessionId) else {
+            appState.setError("No audio data found for playback")
+            return
+        }
+
+        if pcmData.count == 0 {
+            appState.setError("Audio data is empty — cannot play")
             return
         }
 
         do {
-            let player = try AVAudioPlayer(data: audioData as Data)
+            // Wrap raw PCM in a WAV header so AVAudioPlayer can play it.
+            let wavData = AudioManager.pcmToWAV(pcmData as Data)
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(session.sessionId)_playback.wav")
+            try wavData.write(to: tempURL, options: .atomic)
+
+            let player = try AVAudioPlayer(contentsOf: tempURL)
             player.delegate = PlaybackDelegate.shared
-            PlaybackDelegate.shared.onFinish = { [self] in
-                self.isPlaying = false
-                self.audioPlayer = nil
+            PlaybackDelegate.shared.onFinish = {
+                DispatchQueue.main.async {
+                    self.isPlaying = false
+                    self.audioPlayer = nil
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
             }
-            player.play()
+            player.prepareToPlay()
+            let started = player.play()
+            if !started {
+                appState.setError("AVAudioPlayer.play() returned false")
+                try? FileManager.default.removeItem(at: tempURL)
+                return
+            }
             audioPlayer = player
             isPlaying = true
         } catch {
-            log.error("Playback error: \(error.localizedDescription)")
+            appState.setError("Playback error: \(error.localizedDescription)")
         }
     }
 

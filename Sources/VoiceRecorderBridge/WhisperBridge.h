@@ -16,9 +16,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// ```swift
 /// let whisper = WhisperBridge()
 /// whisper.loadModel(Bundle.main.path(forResource: "ggml-base.en", ofType: "bin")!)
-/// whisper.transcribeAudio(atPath: chunkURL.path, sampleRate: 16000,
-///                         progress: { p in print(p) },
-///                         completion: { text, err in ... })
+/// whisper.transcribePCMData(pcmData, sampleRate: 16000,
+///                           progress: { p in print(p) },
+///                           completion: { text, err in ... })
 /// ```
 @interface WhisperBridge : NSObject
 
@@ -44,6 +44,27 @@ NS_ASSUME_NONNULL_BEGIN
                      progress:(void (^)(float progress))progressBlock
                    completion:(void (^)(NSString * _Nullable transcript,
                                         NSError * _Nullable error))completionBlock;
+
+/// Transcribe raw PCM Float32 audio data directly (no file I/O needed).
+///
+/// The data should be mono Float32 samples at the given sample rate.
+/// Runs on a background serial queue.
+///
+/// @param pcmData         Raw PCM data (mono Float32 samples as bytes).
+/// @param sampleRate      Sample rate of the PCM data (e.g. 16000).
+/// @param progressBlock   Called repeatedly on the **main queue** with 0.0-1.0.
+/// @param completionBlock Called once on the **main queue** with the transcript
+///                        string or an NSError.
+- (void)transcribePCMData:(NSData *)pcmData
+               sampleRate:(int)sampleRate
+                 progress:(void (^)(float progress))progressBlock
+               completion:(void (^)(NSString * _Nullable transcript,
+                                    NSError * _Nullable error))completionBlock;
+
+/// Explicitly free the whisper engine and all GGML backends.
+/// Must be called before process exit to avoid a crash in ggml_metal_rsets_free
+/// when C++ static destructors race with the Metal residency-set background thread.
+- (void)shutdown;
 
 @end
 

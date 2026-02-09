@@ -1,428 +1,236 @@
-# VoiceRecorder - Agent Instructions
+# BrainPh.art Voice Recorder — Agent Instructions
 
-## Project Mission
+## What This Is
 
-**Crisis intervention voice recorder for mental health documentation.**
+**BrainPhart Voice** — Local privacy-first voice transcriber for macOS.
+Bundle ID: `art.brainph.voice` | Version: 0.2.0
 
-This is NOT a productivity app. This is black box recording infrastructure for people in crisis. Every decision prioritizes:
-1. **Never lose data** (reliability)
-2. **100% local** (privacy)
-3. **Fast enough to not interrupt crisis documentation** (performance)
+Records audio via AVAudioEngine (16kHz mono PCM), transcribes locally via whisper.cpp with Metal GPU, auto-pastes transcript to cursor. Zero network calls. Zero telemetry.
 
 ---
 
-## Core Principles
+## Architecture
 
-### NO HARD-CODING
-- **Paths**: Check and validate all paths dynamically
-- **Configuration**: Use environment variables or config files
-- **Dependencies**: Version-pinned in lock files, not in code
-- Get an agent to audit all hard-coded values before committing
+### Three-Layer Stack
 
-### USE CURRENT DOCUMENTATION
-- If you need documentation, **request it**
-- Build a documentation bot if needed
-- Make documentation available as skills for other agents
-- Don't rely on outdated knowledge
-- Check GitHub for latest patterns and issues
+```
+┌─────────────────────────────────────────┐
+│  Swift UI Layer (VoiceRecorder/)        │
+│  SwiftUI views, AppState (@MainActor),  │
+│  AudioManager (AVAudioEngine),          │
+│  FloatingOverlay (NSPanel)              │
+├─────────────────────────────────────────┤
+│  Obj-C++ Bridge (VoiceRecorderBridge/)  │
+│  WhisperBridge, StorageBridge           │
+│  Thread-safe callbacks to main queue    │
+├─────────────────────────────────────────┤
+│  C++ Core (VoiceRecorderCore/)          │
+│  WhisperEngine, DatabaseManager,        │
+│  AudioConverter (legacy FFmpeg)         │
+│  Static lib: libVoiceRecorderCore.a     │
+└─────────────────────────────────────────┘
+```
 
-### BUILD TO STANDARDS
-- **Python**: Use UV package manager, follow PEP standards
-- **Swift**: Follow Apple's Swift API Design Guidelines
-- **C++**: Follow C++17 best practices
-- Use known design patterns from industry leaders
+### Key Architectural Decisions
 
-### STREAMING ARCHITECTURE
-- **35-second recording bursts** (44kHz sample rate)
-- If cut-off or loss occurs, only lose 1 bit of recording
-- Everything saved after each burst
-- Audio written to disk continuously, not buffered in memory
-- Crash recovery: can reconstruct from partial recordings
+1. **Pure Swift recording (NOT C++ FFmpeg)**
+   - AudioManager.swift uses AVAudioEngine directly
+   - Records 16kHz mono Float32 PCM (Whisper-native format)
+   - No sample rate conversion needed, no M4A encoding/decoding
+   - Old AudioRecorder.cpp/StorageManager.cpp removed from CMake build
+
+2. **Direct PCM transcription path**
+   - `WhisperBridge.transcribePCMData:` takes raw Float32 bytes
+   - Bypasses AudioConverter/file I/O entirely
+   - Recording → SQLite chunks → concatenated PCM → whisper.cpp
+
+3. **35-second streaming chunks**
+   - AudioManager splits recording into 35s PCM chunks
+   - Each chunk stored in SQLite immediately via StorageBridge
+   - Maximum data loss on crash: 35 seconds
+
+4. **Thread-safe AudioBuffer**
+   - Separate `@unchecked Sendable` class with NSLock
+   - Audio render thread writes → main thread reads
+   - Required because @MainActor classes can't have nonisolated mutating methods
+
+5. **NSPanel floating window**
+   - `.floating` level + `.canJoinAllSpaces` + `hidesOnDeactivate = false`
+   - Non-activating: never steals focus from user's current app
+   - Global hotkey: Cmd+Shift+Space toggles recording
 
 ---
 
-## Technical Requirements
+## Build Commands
 
-### Audio Recording
-- **Sample Rate**: 44,000 Hz (44.1 kHz standard)
-- **Burst Length**: 35 seconds maximum per buffer
-- **Format**: M4A (AAC compression)
-- **Channels**: Mono (1 channel)
-- **Streaming**: Write to disk continuously during recording
-- **Loss Tolerance**: Maximum 1 bit loss on interruption
-
-**Implementation:**
-- FFmpeg with AVFoundation backend
-- Circular buffer for real-time metering
-- Immediate disk writes (no RAM buffering)
-- Atomic file operations for crash safety
-
-### Transcription
-- **Engine**: whisper.cpp with M2 Metal acceleration
-- **Model**: base.en (142MB, 10-15x real-time)
-- **Target Performance**: 30 sec audio → 2-3 sec processing
-- **Progressive**: Show progress during transcription
-- **Retry**: Any recording can be re-transcribed
-
-### Storage
-- **Location**: `~/Library/Application Support/VoiceRecorder/`
-- **Format**: JSON metadata + M4A audio + TXT transcripts
-- **Atomicity**: All writes use atomic operations
-- **Recovery**: Orphaned files detected and processed on launch
-
-### UI
-- **Floating Overlay**: NSPanel with `.floating` level
-- **Waveform**: Real-time visualization during recording
-- **Progress**: Percentage-based during transcription
-- **History**: List view with playback/retry/delete
-- **Auto-Paste**: Accessibility API to cursor location
-
----
-
-## Build System
-
-### Dependencies
-
-**Python/UV:**
+### Step 1: Build C++ static library
 ```bash
-# Use UV, not pip
-uv venv
-uv pip install -r requirements.txt
-```
-
-**whisper.cpp (Git Submodule):**
-```bash
-git submodule add https://github.com/ggml-org/whisper.cpp.git Dependencies/whisper.cpp
-cd Dependencies/whisper.cpp
-WHISPER_METAL=1 make -j
-```
-
-**FFmpeg (Homebrew):**
-```bash
-brew install ffmpeg
-```
-
-### Build Commands
-
-**C++ Core:**
-```bash
+cd /Users/kjd/01-projects/BPH-002-brainphart-voice-recorder
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_METAL=ON
 cmake --build build -j
 ```
 
-**Swift App:**
+### Step 2: Build Swift app
 ```bash
-swift build -c release
+swift build -c release 2>&1
 ```
 
-**DMG Package:**
+### Step 3: Verify build
+```bash
+# Must exit 0 with no errors
+swift build -c release 2>&1 | grep -c "error:"
+# Expected output: 0
+```
+
+### Step 4: Package DMG (optional)
 ```bash
 bash Scripts/create-dmg.sh
 ```
 
----
-
-## Agent Assignments
-
-### Agent 1: C++ Audio + Whisper Core (3 hours)
-
-**Responsibility**: Bare metal audio processing and transcription
-
-**Files to Create:**
-- `Sources/VoiceRecorderCore/WhisperEngine.cpp/.hpp`
-- `Sources/VoiceRecorderCore/AudioRecorder.cpp/.hpp`
-- `Sources/VoiceRecorderCore/AudioConverter.cpp/.hpp`
-- `Sources/VoiceRecorderCore/StorageManager.cpp/.hpp`
-- `Sources/VoiceRecorderCore/Types.hpp`
-
-**Requirements:**
-- whisper.cpp integration with M2 Metal enabled
-- FFmpeg audio recording with 35-sec burst architecture
-- FFmpeg PCM conversion (M4A → 16kHz mono float array)
-- Progress callbacks for UI (0-100%)
-- Atomic file writes, never lose data on crash
-
-**Success Criteria:**
-- Record 35-sec bursts to M4A continuously
-- Transcribe 30-sec audio in < 3 seconds
-- Return progress updates every 100ms
-- Handle crash recovery (detect orphaned files)
-
-**Research Needed:**
-1. Latest whisper.cpp Metal API (check GitHub)
-2. FFmpeg AVFoundation capture examples
-3. Atomic file write patterns in C++
+**IMPORTANT:** Always rebuild the C++ static lib first, then Swift. The Swift build links against `build/libVoiceRecorderCore.a`.
 
 ---
 
-### Agent 2: Swift UI Layer (1 hour)
+## Directory Structure
 
-**Responsibility**: macOS interface
-
-**Files to Create:**
-- `Sources/VoiceRecorder/App.swift`
-- `Sources/VoiceRecorder/AppState.swift`
-- `Sources/VoiceRecorder/FloatingOverlay.swift`
-- `Sources/VoiceRecorder/HistoryWindow.swift`
-- `Sources/VoiceRecorder/Waveform.swift`
-- `Sources/VoiceRecorder/AutoPaste.swift`
-
-**Requirements:**
-- NSPanel floating window (always-on-top)
-- Real-time waveform using Core Graphics
-- Keyboard shortcut (Cmd+Shift+Space)
-- History list with playback controls
-- Accessibility API auto-paste
-
-**Success Criteria:**
-- Overlay stays above all windows
-- Waveform animates smoothly during recording
-- Progress bar updates during transcription
-- History loads instantly (<200ms for 1000 items)
-- Auto-paste works at cursor location
-
-**Research Needed:**
-1. Latest NSPanel API for macOS 13+
-2. Swift Accessibility API examples
-3. CGEventPost for keyboard simulation
-
----
-
-### Agent 3: Bridge + Storage + Integration (1 hour)
-
-**Responsibility**: Connect Swift UI to C++ core
-
-**Files to Create:**
-- `Sources/VoiceRecorderBridge/WhisperBridge.h/.mm`
-- `Sources/VoiceRecorderBridge/AudioBridge.h/.mm`
-- `Sources/VoiceRecorderBridge/StorageBridge.h/.mm`
-- `Sources/VoiceRecorderBridge/VoiceRecorderBridge.h`
-
-**Requirements:**
-- Objective-C++ bridges (Swift ↔ C++)
-- Memory management (no leaks)
-- Thread-safe callbacks
-- Error propagation
-
-**Success Criteria:**
-- Swift can call C++ functions seamlessly
-- No memory leaks (use Instruments to verify)
-- Callbacks work from C++ background threads
-- Errors propagate to Swift as exceptions
-
-**Research Needed:**
-1. Objective-C++ bridging best practices
-2. Swift/C++ interop memory management
-3. Thread-safe callback patterns
-
----
-
-### Agent 4: Build + Package (30 min after others)
-
-**Responsibility**: Build system and distribution
-
-**Files to Create:**
-- `CMakeLists.txt`
-- `Package.swift`
-- `Scripts/setup.sh`
-- `Scripts/build.sh`
-- `Scripts/create-dmg.sh`
-- `Scripts/download-model.sh`
-- `.gitignore`
-- `.gitmodules`
-- `README.md`
-
-**Requirements:**
-- CMake builds C++ with Metal
-- Swift Package Manager integrates everything
-- DMG packages app + model (< 200MB)
-- Setup script initializes submodules
-- No Xcode signing/notarization
-
-**Success Criteria:**
-- `bash setup.sh` prepares environment
-- `bash build.sh` produces working app
-- `bash create-dmg.sh` creates installable DMG
-- DMG drag-and-drop installs to Applications
-
-**Research Needed:**
-1. CMake Metal framework linking
-2. Swift Package Manager + CMake integration
-3. hdiutil DMG creation commands
-
----
-
-## Quality Standards
-
-### Code Review Checklist
-- [ ] No hard-coded paths (use environment/config)
-- [ ] No hard-coded credentials or secrets
-- [ ] All dependencies version-pinned
-- [ ] Error handling on all I/O operations
-- [ ] Memory leaks checked (Instruments on macOS)
-- [ ] Thread safety verified
-- [ ] Documentation comments on public APIs
-- [ ] Build tested from clean state
-
-### Testing Requirements
-- [ ] Record 60 seconds, verify no data loss
-- [ ] Kill app during recording, verify crash recovery
-- [ ] Fill disk during recording, verify graceful handling
-- [ ] Transcribe 30-sec audio in < 3 seconds on M2
-- [ ] Auto-paste works in 10+ different apps
-- [ ] History loads 1000 recordings in < 200ms
-
----
-
-## Common Patterns
-
-### Error Handling (C++)
-```cpp
-// Use std::expected or Result<T, E> pattern
-Result<std::string, Error> transcribe(const AudioData& data) {
-    if (!data.isValid()) {
-        return Error("Invalid audio data");
-    }
-    // ... processing
-    return transcription;
-}
+```
+Sources/
+├── VoiceRecorder/                  # Swift UI layer
+│   ├── VoiceRecorderApp.swift      # Entry point, hotkey, model loading
+│   ├── AppState.swift              # @MainActor state machine (337 lines)
+│   ├── AudioManager.swift          # AVAudioEngine 16kHz PCM recording (295 lines)
+│   ├── Config.swift                # Centralized config, model path resolution
+│   ├── FloatingOverlay.swift       # NSPanel floating window (273 lines)
+│   ├── ContentView.swift           # Main window with history
+│   ├── HistoryView.swift           # Session list sidebar
+│   ├── WaveformView.swift          # Canvas waveform visualization
+│   └── AutoPaste.swift             # CGEvent-based Cmd+V simulation
+│
+├── VoiceRecorderBridge/            # Obj-C++ bridge
+│   ├── WhisperBridge.h/.mm         # whisper.cpp wrapper (PCM + legacy M4A paths)
+│   ├── StorageBridge.h/.mm         # DatabaseManager wrapper
+│   └── VoiceRecorderBridge.h       # Umbrella header
+│
+├── VoiceRecorderCore/              # C++ core (static lib)
+│   ├── WhisperEngine.hpp/.cpp      # whisper.cpp thin wrapper (Metal GPU)
+│   ├── AudioConverter.hpp/.cpp     # M4A→PCM via FFmpeg (LEGACY, still needed for playback)
+│   ├── DatabaseManager.hpp/.cpp    # SQLite WAL persistence
+│   ├── Types.hpp                   # Shared enums/structs
+│   └── module.modulemap            # Clang module map
+│
+├── docs/                           # Fetched documentation (caveman-docs)
+└── Resources/models/               # ggml-base.en.bin whisper model
 ```
 
-### Callbacks (C++ → Swift)
-```cpp
-// C++ side
-using ProgressCallback = std::function<void(float)>;
+### Dead code (NOT compiled, NOT in CMake):
+- `StorageManager.cpp/.hpp` — old orchestrator, replaced by AppState.swift
+- `AudioRecorder.cpp/.hpp` — old FFmpeg recorder, replaced by AudioManager.swift
 
-void transcribe(const AudioData& data, ProgressCallback callback) {
-    for (int i = 0; i < segments; i++) {
-        float progress = (float)i / segments;
-        callback(progress);
-    }
-}
+---
+
+## Current Docs
+
+**READ THESE BEFORE WRITING CODE.** Located in `docs/`:
+
+Documentation is fetched by caveman-docs before each job. If docs/ is empty or missing for a topic you need, request a doc fetch.
+
+---
+
+## Recording Flow (Complete Pipeline)
+
 ```
+User presses Cmd+Shift+Space
+    → AppState.toggleRecording()
+    → AppState.startRecording()
+        → StorageBridge.createSession() → UUID
+        → AudioManager.startRecording()
+            → AVAudioEngine.inputNode.installTap()
+            → Converts native format → 16kHz mono Float32
+            → Accumulates in AudioBuffer (NSLock-protected)
+            → Every 35 seconds: fires onChunkComplete callback
+                → AppState receives chunk
+                → StorageBridge.addChunk(data, sessionId, index)
+        → Metering timer (50ms): polls AudioManager.getMeteringLevel()
+        → Elapsed timer (1s): increments recordingElapsedSeconds
 
-```swift
-// Swift side
-whisperBridge.transcribe(audioPath) { progress in
-    DispatchQueue.main.async {
-        self.transcriptionProgress = progress
-    }
-}
-```
-
-### Atomic File Writes (C++)
-```cpp
-// Write to temp, then atomic rename
-std::string temp_path = path + ".tmp";
-write_file(temp_path, data);
-std::filesystem::rename(temp_path, path);  // Atomic on POSIX
+User presses Cmd+Shift+Space again
+    → AppState.stopRecording()
+        → AudioManager.stopRecording()
+            → Flushes final partial chunk
+        → AppState.transcribeActiveSession()
+            → StorageBridge.getAudioForSession() → concatenated PCM Data
+            → WhisperBridge.transcribePCMData(data, 16000, progress, completion)
+                → Background serial queue
+                → WhisperEngine.transcribe(pcm_float_array)
+                    → whisper_full() with Metal GPU
+                    → Progress callbacks → main queue
+                → Completion → main queue
+            → StorageBridge.updateTranscript(text, sessionId)
+            → AutoPaste.pasteText(text) → clipboard + CGEvent Cmd+V
+            → Reload session list
 ```
 
 ---
 
-## Performance Targets
+## Known Pitfalls
 
-| Operation | Target | Maximum |
-|-----------|--------|---------|
-| Recording start | 50ms | 100ms |
-| Transcription (30s) | 2s | 3s |
-| Auto-paste delay | 25ms | 50ms |
-| History load (1000) | 100ms | 200ms |
-| Memory usage | 400MB | 600MB |
-| App launch | 1s | 2s |
+> Lessons from $8+ and 130+ turns of previous failed jobs. DO NOT repeat these.
 
----
+### Audio
+- **AVAudioConverter status bugs:** The `status` property after conversion can report misleading values. Always check the actual output buffer length, not just the status enum.
+- **Interleaved format mismatch:** AVAudioEngine tap delivers non-interleaved buffers. AVAudioConverter input format must match exactly. Use `AVAudioFormat(commonFormat:sampleRate:channels:interleaved:)` with `interleaved: false`.
+- **WAV header for Float32:** Use `audioFormat = 3` (IEEE float), NOT `1` (PCM integer). Getting this wrong produces static/noise on playback.
+- **AudioManager chunk boundary:** The 35-second chunk split happens in the audio tap callback. Off-by-one errors here cause data gaps or duplicated samples.
 
-## Security & Privacy
+### Transcription
+- **Model path resolution is complex:** Binary runs from `.build/release/` which is 4+ levels deep. Bundle.main paths WILL NOT WORK in SPM executables. Config.swift walks up from the executable path checking 9 candidate locations.
+- **Silent failures:** If whisper model fails to load, transcription silently returns empty string. ALWAYS check `isModelLoaded` before attempting transcription and surface errors to UI.
 
-### Data Handling
-- **All processing local** (zero network calls)
-- **No telemetry** (no analytics, no tracking)
-- **No cloud fallback** (even if transcription fails)
-- **Encryption at rest** (future: optional AES-256)
+### UI
+- **NSPanel hidesOnDeactivate:** MUST be `false`. If `true`, the floating overlay disappears when the app loses focus — which is the primary use case.
+- **NSHostingController transparency:** The hosting controller's view must also have a clear background. Setting only the panel background to `.clear` is not enough.
+- **becomesKeyOnlyIfNeeded:** Must be `true` on the NSPanel. Otherwise clicking the overlay steals focus from the user's active app.
 
-### Permissions Required
-- Microphone (NSMicrophoneUsageDescription)
-- Accessibility (NSAccessibilityUsageDescription)
+### Build System
+- **Rebuild static lib first:** Swift linker uses stale `.a` file if you don't rebuild CMake first.
+- **macOS version warnings are cosmetic:** Static libs built for newer macOS show warnings but work fine.
+- **module.modulemap must match compiled sources:** If you remove a .cpp/.hpp from CMake, also remove its header from the modulemap. Stale modulemap entries cause build failures.
+- **FFmpeg still needed:** AudioConverter.cpp uses FFmpeg for legacy M4A decoding. Cannot remove FFmpeg libs from Package.swift until M4A support is fully removed.
 
-### Permissions NOT Required
-- Network (explicitly disabled)
-- Location
-- Contacts
-- Calendar
-
----
-
-## Crisis-Specific Considerations
-
-### Why 35-Second Bursts?
-- Prevents catastrophic data loss during system crash
-- Balances disk I/O with memory efficiency
-- Matches typical speech pattern lengths
-- Allows partial recovery if interrupted
-
-### Why Immediate Disk Writes?
-- Crisis documentation cannot be lost
-- RAM is volatile (crash = data loss)
-- Disk writes are durable (survives crash)
-- Trade: slightly higher disk wear for safety
-
-### Why No Buffering?
-- Buffering increases data loss risk
-- Crisis users may force-quit during panic
-- Immediate writes guarantee data survival
-- Performance cost is acceptable (<10ms per write)
-
----
-
-## Documentation Requirements
-
-### Request Information When Needed
-If you need current documentation:
-1. Search official sources (Apple Developer, GitHub, Homebrew)
-2. Use web search for latest API changes
-3. Check GitHub issues for known problems
-4. Build documentation bot if needed
-5. Make findings available as skills for future agents
-
-### Keep Documentation Current
-- Don't rely on outdated training data
-- Verify API signatures before using
-- Check deprecation notices
-- Test on actual M2 hardware
+### Anti-Patterns From Failed Jobs
+- Agent "simplified" by removing features when encountering compiler errors
+- Agent used training data for AVAudioConverter API instead of checking current docs
+- Agent stubbed out error handling with empty catch blocks
+- Agent edited same file 10+ times without building (thrashing)
+- Agent never ran `swift build` to verify changes compiled
 
 ---
 
 ## What NOT To Do
 
-❌ Use Swift wrapper libraries (WhisperKit, SwiftWhisper)  
-❌ Buffer audio in RAM (write to disk immediately)  
-❌ Hard-code paths or configuration  
-❌ Use pip (use UV instead)  
-❌ Skip error handling  
-❌ Assume APIs haven't changed  
-❌ Build without testing crash recovery  
-❌ Create unsigned builds that require notarization  
-❌ Add cloud sync or telemetry  
+- Do NOT code from training data — read the docs in `docs/` first
+- Do NOT simplify or stub features when you hit errors — fix the root cause
+- Do NOT skip `swift build` before declaring done
+- Do NOT use WhisperKit or SwiftWhisper wrapper libraries
+- Do NOT buffer entire recordings in RAM — use the 35s chunk architecture
+- Do NOT hard-code file paths
+- Do NOT add network calls or telemetry
+- Do NOT remove error handling or use empty catch blocks
+- Do NOT edit a file without reading it first
+- Do NOT edit the same file more than 5 times without building to verify
 
 ---
 
-## Final Checklist
+## Verification Checklist
 
-Before calling this complete:
-- [ ] Records audio in 35-sec bursts
-- [ ] Transcribes in < 3 seconds on M2
-- [ ] Auto-pastes to cursor location
-- [ ] Never loses data (tested with kill -9)
-- [ ] History shows all recordings
-- [ ] Retry transcription works
-- [ ] 100% local (verified with network disabled)
-- [ ] DMG installs via drag-and-drop
-- [ ] No hard-coded values
-- [ ] All paths validated by agent
-- [ ] Documentation current
-- [ ] Build tested from clean state
+Before declaring ANY job complete:
+
+1. `swift build -c release 2>&1` — ZERO errors
+2. All files you modified still exist and are non-empty
+3. No features removed from what was requested
+4. Error messages surface to UI (check `AppState.errorMessage` is set on failures)
+5. Any new code has proper error handling (no empty catch blocks)
 
 ---
 
-**This is crisis intervention infrastructure. Build it like lives depend on it. Because they do.**
+**This is crisis intervention infrastructure. Build it like lives depend on it.**

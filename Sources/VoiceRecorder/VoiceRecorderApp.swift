@@ -4,7 +4,7 @@
 //
 //  macOS app entry point.
 //  - Initialises StorageBridge and whisper model on launch.
-//  - Registers global hotkey (Cmd+Shift+Space) via NSEvent monitor.
+//  - Registers global hotkey (Cmd+Shift+R) via NSEvent monitor.
 //  - Opens the main history window via WindowGroup.
 //  - Runs crash recovery for orphaned sessions on first launch.
 //
@@ -17,6 +17,7 @@ import VoiceRecorderBridge
 struct VoiceRecorderApp: App {
     // MARK: - State
 
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var appState = AppState()
 
     /// Status-bar item for menu-bar presence (optional).
@@ -25,10 +26,11 @@ struct VoiceRecorderApp: App {
     // MARK: - Body
 
     var body: some Scene {
-        WindowGroup("Voice Recorder") {
+        WindowGroup("BrainPhart Voice") {
             ContentView()
                 .environment(appState)
                 .onAppear {
+                    appDelegate.appState = appState
                     bootstrapOnFirstAppear()
                 }
         }
@@ -51,15 +53,18 @@ struct VoiceRecorderApp: App {
 
     private func loadWhisperModel() {
         guard let path = Config.resolveModelPath() else {
-            log.error("Could not locate whisper model (\(Config.whisperModelFilename)) in any candidate path.")
+            appState.setError("Whisper model not found (\(Config.whisperModelFilename)) — transcription disabled")
+            appState.isModelLoaded = false
             return
         }
 
         let success = appState.whisperBridge.loadModel(path)
         if success {
             log.info("Whisper model loaded from: \(path)")
+            appState.isModelLoaded = true
         } else {
-            log.error("Failed to load whisper model from: \(path)")
+            appState.setError("Failed to load whisper model from: \(path)")
+            appState.isModelLoaded = false
         }
     }
 
@@ -79,13 +84,13 @@ struct VoiceRecorderApp: App {
 
     // MARK: - Global Hotkey
 
-    /// Registers Cmd+Shift+Space as a system-wide hotkey to toggle recording.
+    /// Registers Cmd+Shift+R as a system-wide hotkey to toggle recording.
     private func registerGlobalHotkey() {
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
             let requiredFlags: NSEvent.ModifierFlags = [.command, .shift]
             let hasFlags = event.modifierFlags.contains(requiredFlags)
-            let isSpace = event.keyCode == 49  // spacebar
-            if hasFlags && isSpace {
+            let isR = event.keyCode == 15  // R key
+            if hasFlags && isR {
                 Task { @MainActor in
                     appState.toggleRecording()
                 }
@@ -97,8 +102,8 @@ struct VoiceRecorderApp: App {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let requiredFlags: NSEvent.ModifierFlags = [.command, .shift]
             let hasFlags = event.modifierFlags.contains(requiredFlags)
-            let isSpace = event.keyCode == 49
-            if hasFlags && isSpace {
+            let isR = event.keyCode == 15
+            if hasFlags && isR {
                 Task { @MainActor in
                     appState.toggleRecording()
                 }
@@ -114,15 +119,15 @@ struct VoiceRecorderApp: App {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
             button.image = NSImage(systemSymbolName: "mic.fill",
-                                   accessibilityDescription: "Voice Recorder")
+                                   accessibilityDescription: "BrainPhart Voice")
         }
 
         let menu = NSMenu()
-        menu.addItem(withTitle: "Toggle Recording (Cmd+Shift+Space)",
+        menu.addItem(withTitle: "Toggle Recording (Cmd+Shift+R)",
                      action: #selector(NSApplication.shared.toggleRecordingMenuItem(_:)),
                      keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Voice Recorder",
+        menu.addItem(withTitle: "Quit BrainPhart Voice",
                      action: #selector(NSApplication.shared.terminate(_:)),
                      keyEquivalent: "q")
         item.menu = menu
@@ -143,4 +148,18 @@ extension NSApplication {
 
 extension Notification.Name {
     static let toggleRecordingAction = Notification.Name("com.voicerecorder.toggleRecording")
+}
+
+// MARK: - App Delegate
+
+/// Handles graceful shutdown. Without this, exit() runs C++ static destructors
+/// which try to free the ggml Metal device while its background residency-set
+/// thread is still running — causing a crash (ggml_abort in ggml_metal_rsets_free).
+@MainActor
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var appState: AppState?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        appState?.cleanup()
+    }
 }

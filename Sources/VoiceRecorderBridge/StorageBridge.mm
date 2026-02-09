@@ -121,31 +121,40 @@ static VRSession *SessionToObjC(const vr::RecordingSession &s) {
     }
 }
 
-- (void)addChunk:(NSData *)audioData
+- (BOOL)addChunk:(NSData *)audioData
        toSession:(NSString *)sessionId
          atIndex:(NSInteger)index {
     if (!_db) {
         NSLog(@"[StorageBridge] addChunk called but database is not initialized.");
-        return;
+        return NO;
+    }
+
+    if (!audioData || audioData.length == 0) {
+        NSLog(@"[StorageBridge] addChunk called with empty audio data for session %@", sessionId);
+        return NO;
     }
 
     try {
-        vr::AudioChunk chunk;
-        chunk.session_id  = std::string([sessionId UTF8String]);
-        chunk.chunk_index = static_cast<int32_t>(index);
+        std::string sid = std::string([sessionId UTF8String]);
+        int32_t idx = static_cast<int32_t>(index);
 
         // Copy NSData bytes into the vector.
         const uint8_t *bytes = static_cast<const uint8_t *>(audioData.bytes);
-        chunk.audio_data.assign(bytes, bytes + audioData.length);
+        std::vector<uint8_t> data(bytes, bytes + audioData.length);
 
-        // Duration is not known at this point; DatabaseManager can compute it
-        // from the audio data or set it to 0.
-        chunk.duration_ms = 0;
-
-        _db->add_chunk(chunk.session_id, chunk.chunk_index, chunk.audio_data, chunk.duration_ms);
+        bool ok = _db->add_chunk(sid, idx, data, 0);
+        if (!ok) {
+            NSLog(@"[StorageBridge] add_chunk returned false for session %@ chunk %d (%lu bytes)",
+                  sessionId, idx, (unsigned long)audioData.length);
+        } else {
+            NSLog(@"[StorageBridge] Stored chunk %d for session %@ (%lu bytes)",
+                  idx, sessionId, (unsigned long)audioData.length);
+        }
+        return ok ? YES : NO;
 
     } catch (const std::exception &e) {
         NSLog(@"[StorageBridge] addChunk exception: %s", e.what());
+        return NO;
     }
 }
 
@@ -214,17 +223,9 @@ static VRSession *SessionToObjC(const vr::RecordingSession &s) {
             return [[NSData alloc] initWithBytes:data.data() length:data.size()];
         }
 
-        // Multiple chunks: concatenate raw audio data.
-        //
-        // M4A files are not trivially concatenable at the byte level.  A
-        // proper approach uses AudioConverter to decode each chunk to PCM,
-        // concatenate the PCM buffers, and re-encode.  However, the C++ core
-        // exposes AudioConverter for exactly this purpose.
-        //
-        // For the initial bridge layer we concatenate the raw M4A payloads.
-        // The caller (or a higher-level Swift coordinator) is responsible for
-        // feeding individual chunks to AudioConverter if lossless join is
-        // required.
+        // Multiple chunks: concatenate raw PCM data.
+        // Chunks are stored as 16kHz mono Float32 PCM bytes, so simple
+        // byte concatenation produces a valid continuous PCM stream.
         //
         // Estimate total size for a single allocation.
         size_t totalSize = 0;

@@ -33,22 +33,32 @@ std::vector<float> AudioConverter::m4a_to_pcm(const std::string& input_path,
     // 1. Open input file
     AVFormatContext* fmt_ctx = nullptr;
     int ret = avformat_open_input(&fmt_ctx, input_path.c_str(), nullptr, nullptr);
-    if (ret < 0) return {};
+    if (ret < 0) {
+        char errbuf[256];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        throw std::runtime_error(std::string("Failed to open audio file '") + input_path + "': " + errbuf);
+    }
 
     ret = avformat_find_stream_info(fmt_ctx, nullptr);
-    if (ret < 0) { avformat_close_input(&fmt_ctx); return {}; }
+    if (ret < 0) { avformat_close_input(&fmt_ctx); throw std::runtime_error("Failed to find stream info in audio file"); }
 
     // 2. Find the audio stream
     int audio_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
-    if (audio_idx < 0) { avformat_close_input(&fmt_ctx); return {}; }
+    if (audio_idx < 0) { avformat_close_input(&fmt_ctx); throw std::runtime_error("No audio stream found in file"); }
 
     AVStream* stream = fmt_ctx->streams[audio_idx];
 
     // 3. Open decoder
     const AVCodec* decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (!decoder) { avformat_close_input(&fmt_ctx); throw std::runtime_error("No decoder found for audio codec"); }
     AVCodecContext* dec_ctx = avcodec_alloc_context3(decoder);
     avcodec_parameters_to_context(dec_ctx, stream->codecpar);
-    avcodec_open2(dec_ctx, decoder, nullptr);
+    ret = avcodec_open2(dec_ctx, decoder, nullptr);
+    if (ret < 0) {
+        avcodec_free_context(&dec_ctx);
+        avformat_close_input(&fmt_ctx);
+        throw std::runtime_error("Failed to open audio decoder");
+    }
 
     // 4. Set up resampler
     AVChannelLayout out_layout = AV_CHANNEL_LAYOUT_MONO;
@@ -61,7 +71,7 @@ std::vector<float> AudioConverter::m4a_to_pcm(const std::string& input_path,
         avcodec_free_context(&dec_ctx);
         avformat_close_input(&fmt_ctx);
         if (swr) swr_free(&swr);
-        return {};
+        throw std::runtime_error("Failed to initialize audio resampler");
     }
 
     // 5. Read packets, decode frames, resample

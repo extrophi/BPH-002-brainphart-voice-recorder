@@ -82,7 +82,7 @@ std::string WhisperEngine::transcribe(const std::vector<float>& audio_data,
     std::lock_guard<std::mutex> lock(mu_);
 
     if (!ctx_) {
-        return "";
+        throw std::runtime_error("Whisper model not loaded");
     }
 
     // 1. Resample to 16 kHz if necessary.
@@ -94,7 +94,7 @@ std::string WhisperEngine::transcribe(const std::vector<float>& audio_data,
     }
 
     if (pcm16k.empty()) {
-        return "";
+        throw std::runtime_error("Audio data is empty after resampling");
     }
 
     // Configure whisper parameters
@@ -123,7 +123,7 @@ std::string WhisperEngine::transcribe(const std::vector<float>& audio_data,
     int ret = whisper_full(ctx_, params, pcm16k.data(),
                            static_cast<int>(pcm16k.size()));
     if (ret != 0) {
-        return "";
+        throw std::runtime_error("whisper_full() returned error code " + std::to_string(ret));
     }
 
     // Collect segments

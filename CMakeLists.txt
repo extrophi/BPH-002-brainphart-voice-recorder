@@ -28,6 +28,7 @@ set(WHISPER_INCLUDE_DIR "${WHISPER_DIR}/include")
 
 # ---------------------------------------------------------------------------
 # FFmpeg — use pre-built static libs from setup.sh
+# (Still needed for AudioConverter which decodes M4A/WAV for whisper.cpp)
 # ---------------------------------------------------------------------------
 set(FFMPEG_LIB_DIR "${FFMPEG_DIR}/lib")
 set(FFMPEG_INCLUDE_DIR "${FFMPEG_DIR}/include")
@@ -35,7 +36,6 @@ set(FFMPEG_INCLUDE_DIR "${FFMPEG_DIR}/include")
 find_library(AVFORMAT_LIB avformat PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
 find_library(AVCODEC_LIB avcodec PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
 find_library(AVUTIL_LIB avutil PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
-find_library(AVDEVICE_LIB avdevice PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
 find_library(SWRESAMPLE_LIB swresample PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
 
 if(NOT AVFORMAT_LIB)
@@ -57,13 +57,14 @@ find_library(SQLITE3_LIB sqlite3)
 
 # ---------------------------------------------------------------------------
 # VoiceRecorderCore static library
+# Note: AudioRecorder and StorageManager removed — recording is now handled
+# by AudioManager.swift via AVAudioEngine. AudioConverter kept for legacy
+# M4A decoding and file-based transcription fallback.
 # ---------------------------------------------------------------------------
 set(CORE_SOURCES
     Sources/VoiceRecorderCore/WhisperEngine.cpp
-    Sources/VoiceRecorderCore/AudioRecorder.cpp
     Sources/VoiceRecorderCore/AudioConverter.cpp
     Sources/VoiceRecorderCore/DatabaseManager.cpp
-    Sources/VoiceRecorderCore/StorageManager.cpp
 )
 
 add_library(VoiceRecorderCore STATIC ${CORE_SOURCES})
@@ -81,7 +82,6 @@ target_link_libraries(VoiceRecorderCore PUBLIC
     ${AVFORMAT_LIB}
     ${AVCODEC_LIB}
     ${AVUTIL_LIB}
-    ${AVDEVICE_LIB}
     ${SWRESAMPLE_LIB}
     ${SQLITE3_LIB}
     ${METAL_FRAMEWORK}

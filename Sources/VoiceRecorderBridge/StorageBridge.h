@@ -68,11 +68,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// @return The UUID string of the newly created session.
 - (NSString *)createSession;
 
-/// Persist an audio chunk (M4A data) for the given session.
-/// @param audioData  Raw M4A file bytes.
+/// Persist an audio chunk for the given session.
+/// @param audioData  Raw PCM bytes (16kHz mono Float32).
 /// @param sessionId  The session this chunk belongs to.
 /// @param index      Zero-based chunk index within the session.
-- (void)addChunk:(NSData *)audioData
+/// @return YES if the chunk was stored successfully, NO on failure.
+- (BOOL)addChunk:(NSData *)audioData
        toSession:(NSString *)sessionId
          atIndex:(NSInteger)index;
 
@@ -90,7 +91,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSArray<VRSession *> *)getAllSessions;
 
 /// Reconstruct the full audio for a session by concatenating all of its
-/// chunks' M4A data.  Returns nil if no chunks exist.
+/// chunks' raw PCM data.  Returns nil if no chunks exist.
 - (NSData * _Nullable)getAudioForSession:(NSString *)sessionId;
 
 /// Permanently delete a session and all its chunks.
