@@ -44,8 +44,8 @@ final class AppSettings {
 
     // MARK: - Defaults
 
-    /// Carbon key code for 'R' key.
-    private static let defaultKeyCode: UInt32 = 15
+    /// Key code 0 = modifier-only hotkey (no letter key).
+    private static let defaultKeyCode: UInt32 = 0
 
     /// Option + Shift modifier flags.
     private static let defaultModifiers: UInt32 = UInt32(
@@ -115,7 +115,9 @@ final class AppSettings {
         if mods.contains(.shift)   { parts.append("\u{21E7}") }   // ⇧
         if mods.contains(.command) { parts.append("\u{2318}") }   // ⌘
 
-        parts.append(keyCodeToString(hotkeyKeyCode))
+        if hotkeyKeyCode > 0 {
+            parts.append(keyCodeToString(hotkeyKeyCode))
+        }
         return parts.joined()
     }
 

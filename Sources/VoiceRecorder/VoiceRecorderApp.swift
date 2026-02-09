@@ -4,14 +4,13 @@
 //
 //  macOS app entry point.
 //  - Initialises StorageBridge and whisper model on launch.
-//  - Registers global hotkey (Option+Shift+R) via HotKey library (Carbon RegisterEventHotKey).
+//  - Registers global hotkey (Option+Shift) via NSEvent flagsChanged monitor.
 //  - Opens the main history window via WindowGroup.
 //  - Runs crash recovery for orphaned sessions on first launch.
 //
 
 import SwiftUI
 import AppKit
-import HotKey
 import VoiceRecorderBridge
 
 @main
@@ -142,7 +141,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     let appSettings = AppSettings()
     private var statusItem: NSStatusItem?
-    private var hotKey: HotKey?
+    private var flagsMonitor: Any?
+    private var modifiersDown = false
     private var keyDownTimestamp: Date?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -179,7 +179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(withTitle: "Toggle Recording (⌥⇧R)",
+        menu.addItem(withTitle: "Toggle Recording (⌥⇧)",
                      action: #selector(NSApplication.shared.toggleRecordingMenuItem(_:)),
                      keyEquivalent: "")
         menu.addItem(withTitle: "Show History",
@@ -199,42 +199,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
-    // MARK: - Global Hotkey (Carbon RegisterEventHotKey via HotKey library)
+    // MARK: - Global Hotkey (Option+Shift via flagsChanged monitor)
 
     /// Minimum hold duration (seconds) to distinguish a hold from a tap.
     private static let holdThreshold: TimeInterval = 0.3
 
+    /// The exact modifier flags we're looking for (Option + Shift, nothing else).
+    private static let targetModifiers: NSEvent.ModifierFlags = [.option, .shift]
+    private static let modifierMask: NSEvent.ModifierFlags = [.option, .shift, .command, .control]
+
     private func registerGlobalHotkey() {
-        let hk = HotKey(key: .r, modifiers: [.option, .shift])
+        flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.handleFlagsChanged(event)
+            }
+        }
+    }
 
-        hk.keyDownHandler = { [weak self] in
-            guard let self else { return }
-            self.keyDownTimestamp = Date()
+    private func handleFlagsChanged(_ event: NSEvent) {
+        let active = event.modifierFlags.intersection(AppDelegate.modifierMask)
+        let matched = active == AppDelegate.targetModifiers
 
-            switch self.appSettings.recordingMode {
+        if matched && !modifiersDown {
+            // Option+Shift just pressed
+            modifiersDown = true
+            keyDownTimestamp = Date()
+
+            switch appSettings.recordingMode {
             case .toggle:
-                self.appState.toggleRecording()
+                appState.toggleRecording()
             case .pushToTalk:
-                if !self.appState.isRecording {
-                    self.appState.startRecording()
+                if !appState.isRecording {
+                    appState.startRecording()
                 }
             }
-        }
+        } else if !matched && modifiersDown {
+            // Option+Shift released
+            modifiersDown = false
 
-        hk.keyUpHandler = { [weak self] in
-            guard let self else { return }
-            guard self.appSettings.recordingMode == .pushToTalk else { return }
-            guard self.appState.isRecording else { return }
-
-            let holdDuration = Date().timeIntervalSince(self.keyDownTimestamp ?? Date())
-            if holdDuration >= AppDelegate.holdThreshold {
-                self.appState.stopRecording()
-            } else {
-                self.appState.cancelRecording()
+            if appSettings.recordingMode == .pushToTalk, appState.isRecording {
+                let holdDuration = Date().timeIntervalSince(keyDownTimestamp ?? Date())
+                if holdDuration >= AppDelegate.holdThreshold {
+                    appState.stopRecording()
+                } else {
+                    appState.cancelRecording()
+                }
             }
-            self.keyDownTimestamp = nil
+            keyDownTimestamp = nil
         }
-
-        self.hotKey = hk
     }
 }
