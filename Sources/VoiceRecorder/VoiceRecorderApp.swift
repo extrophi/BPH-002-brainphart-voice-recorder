@@ -142,12 +142,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let appSettings = AppSettings()
     private var statusItem: NSStatusItem?
     private var flagsMonitor: Any?
+    private var escapeMonitor: Any?
     private var modifiersDown = false
     private var keyDownTimestamp: Date?
+    private var lastEscapeTimestamp: Date?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenuBarItem()
         registerGlobalHotkey()
+        registerEscapeMonitor()
 
         // Set accessory policy AFTER menu bar item is installed.
         // This hides the dock icon and prevents the WindowGroup from
@@ -246,6 +249,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             keyDownTimestamp = nil
+        }
+    }
+
+    // MARK: - Double-Escape to Cancel Recording
+
+    /// Maximum interval between two Escape presses to count as double-tap.
+    private static let doubleEscapeInterval: TimeInterval = 0.4
+
+    private func registerEscapeMonitor() {
+        escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return } // 53 = Escape
+            Task { @MainActor [weak self] in
+                self?.handleEscapePress()
+            }
+        }
+    }
+
+    private func handleEscapePress() {
+        let now = Date()
+        if let last = lastEscapeTimestamp,
+           now.timeIntervalSince(last) < AppDelegate.doubleEscapeInterval {
+            // Double-Escape: cancel recording
+            if appState.isRecording {
+                appState.cancelRecording()
+            }
+            lastEscapeTimestamp = nil
+        } else {
+            lastEscapeTimestamp = now
         }
     }
 }

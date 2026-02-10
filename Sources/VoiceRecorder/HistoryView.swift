@@ -120,7 +120,7 @@ struct HistoryView: View {
                 Text("No recordings yet")
                     .font(.headline)
                     .foregroundStyle(.secondary)
-                Text("Press ⌥⇧R to start recording")
+                Text("Press ⌥⇧ to start recording")
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
             } else {

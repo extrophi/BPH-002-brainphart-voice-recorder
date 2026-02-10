@@ -220,7 +220,7 @@ struct FloatingOverlayContent: View {
                     .foregroundStyle(.tertiary)
             }
 
-            Text("⌥⇧R")
+            Text("⌥⇧")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundStyle(.tertiary)
         }
