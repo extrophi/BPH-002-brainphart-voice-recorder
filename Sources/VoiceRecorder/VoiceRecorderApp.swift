@@ -118,9 +118,12 @@ extension NSApplication {
 
     /// Selector target for the menu-bar "Show History" item.
     @objc func showHistoryMenuItem(_ sender: Any?) {
+        // Must switch to regular policy so the window can appear
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
         for window in self.windows where !(window is NSPanel) {
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
             return
         }
     }
@@ -157,6 +160,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // showing its window on launch. The menu bar item survives
         // because it was created before the policy change.
         NSApp.setActivationPolicy(.accessory)
+
+        // Watch for window close to switch back to accessory mode
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let window = notification.object as? NSWindow,
+                  !(window is NSPanel) else { return }
+            // Delay so the close animation finishes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                // Only go back to accessory if no visible windows remain
+                let hasVisible = NSApp.windows.contains { !($0 is NSPanel) && $0.isVisible }
+                if !hasVisible {
+                    NSApp.setActivationPolicy(.accessory)
+                }
+            }
+        }
 
         appState.showFloatingOverlay()
     }
