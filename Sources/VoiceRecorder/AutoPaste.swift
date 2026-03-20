@@ -95,17 +95,38 @@ enum AutoPaste {
     /// Whether we've already shown the accessibility alert this launch.
     private static var hasShownAlert = false
 
-    /// Returns `true` if the process is trusted for Accessibility.
+    /// Returns `true` if the process is trusted for Accessibility (PostEvent).
     /// Shows an explanatory alert at most once per app launch if not trusted.
     @MainActor
     static func ensureAccessibilityPermission() -> Bool {
-        let trusted = AXIsProcessTrusted()
-
-        if !trusted && !hasShownAlert {
-            hasShownAlert = true
-            showAccessibilityAlert()
+        // On macOS 15+, CGPreflightPostEventAccess is the authoritative check
+        // for whether CGEvent posting will succeed. AXIsProcessTrusted alone is
+        // not sufficient — the OS may grant accessibility but block event posting
+        // after a major OS upgrade resets TCC permissions.
+        let canPostEvents: Bool
+        if #available(macOS 15, *) {
+            canPostEvents = CGPreflightPostEventAccess()
+            if !canPostEvents {
+                log.warning("CGPreflightPostEventAccess returned false — requesting access")
+                // This prompts the system permission dialog if not yet decided.
+                let granted = CGRequestPostEventAccess()
+                if granted {
+                    log.info("CGRequestPostEventAccess granted — auto-paste enabled")
+                    return true
+                }
+            }
+        } else {
+            canPostEvents = AXIsProcessTrusted()
         }
-        return trusted
+
+        if !canPostEvents {
+            log.warning("Event posting permission not granted — auto-paste disabled")
+            if !hasShownAlert {
+                hasShownAlert = true
+                showAccessibilityAlert()
+            }
+        }
+        return canPostEvents
     }
 
     // MARK: - Simulate Cmd+V
@@ -141,13 +162,16 @@ enum AutoPaste {
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
         alert.informativeText = """
-            BrainPhart Voice needs Accessibility permission to auto-paste \
-            transcriptions at your cursor.
+            BrainPhart Voice needs Accessibility and PostEvent permissions to \
+            auto-paste transcriptions.
 
-            Please grant access in:
-            System Settings > Privacy & Security > Accessibility
+            After a fresh install, you must re-grant these — even if previously granted:
+            1. System Settings > Privacy & Security > Accessibility
+               — Remove old entry, add /Applications/BrainPhart Voice.app
+            2. Quit and relaunch the app
 
-            Then relaunch the app.
+            On macOS 15+, the system will also prompt separately for PostEvent \
+            access — click Allow.
             """
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Open System Settings")

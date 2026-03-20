@@ -123,7 +123,8 @@ bool DatabaseManager::is_open() const {
 // ---------------------------------------------------------------------------
 
 bool DatabaseManager::create_tables() {
-    const char* sql = R"SQL(
+    // Create tables with current schema.
+    const char* create_sessions = R"SQL(
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             created_at INTEGER NOT NULL,
@@ -132,6 +133,9 @@ bool DatabaseManager::create_tables() {
             duration_ms INTEGER,
             transcript TEXT
         );
+    )SQL";
+
+    const char* create_chunks = R"SQL(
         CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
@@ -141,16 +145,44 @@ bool DatabaseManager::create_tables() {
             created_at INTEGER NOT NULL,
             FOREIGN KEY (session_id) REFERENCES sessions(id)
         );
-        CREATE INDEX IF NOT EXISTS idx_chunks_session
-            ON chunks(session_id, chunk_index);
     )SQL";
 
     char* err = nullptr;
-    int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &err);
+
+    // Create sessions table.
+    int rc = sqlite3_exec(db_, create_sessions, nullptr, nullptr, &err);
     if (rc != SQLITE_OK) {
         if (err) sqlite3_free(err);
         return false;
     }
+
+    // Migrate sessions: add columns that may be missing from older schema.
+    // ALTER TABLE ADD COLUMN is a no-op error if column already exists.
+    sqlite3_exec(db_, "ALTER TABLE sessions ADD COLUMN duration_ms INTEGER",
+                 nullptr, nullptr, nullptr);
+    sqlite3_exec(db_, "ALTER TABLE sessions ADD COLUMN transcript TEXT",
+                 nullptr, nullptr, nullptr);
+
+    // Create chunks table (no-op if table already exists).
+    rc = sqlite3_exec(db_, create_chunks, nullptr, nullptr, &err);
+    if (rc != SQLITE_OK && err) {
+        sqlite3_free(err);
+        err = nullptr;
+    }
+
+    // Migrate chunks: old schema used chunk_num instead of chunk_index.
+    // RENAME COLUMN is safe on SQLite 3.25+ (macOS 14 ships 3.43+).
+    // Silently ignored if chunk_num doesn't exist or is already renamed.
+    sqlite3_exec(db_,
+        "ALTER TABLE chunks RENAME COLUMN chunk_num TO chunk_index",
+        nullptr, nullptr, nullptr);
+
+    // Create index (safe — chunk_index now exists either way).
+    sqlite3_exec(db_,
+        "CREATE INDEX IF NOT EXISTS idx_chunks_session "
+        "ON chunks(session_id, chunk_index)",
+        nullptr, nullptr, nullptr);
+
     return true;
 }
 

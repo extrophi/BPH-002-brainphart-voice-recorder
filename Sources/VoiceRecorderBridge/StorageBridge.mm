@@ -95,12 +95,12 @@ static VRSession *SessionToObjC(const vr::RecordingSession &s) {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(
         NSApplicationSupportDirectory, NSUserDomainMask, YES);
     NSString *appSupport = paths.firstObject ?: NSTemporaryDirectory();
-    NSString *dir = [appSupport stringByAppendingPathComponent:@"VoiceRecorder"];
+    NSString *dir = [appSupport stringByAppendingPathComponent:@"brainphart-voice"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
                               withIntermediateDirectories:YES
                                                attributes:nil
                                                     error:nil];
-    NSString *dbPath = [dir stringByAppendingPathComponent:@"voicerecorder.db"];
+    NSString *dbPath = [dir stringByAppendingPathComponent:@"database.db"];
     return [self initWithDatabasePath:dbPath];
 }
 

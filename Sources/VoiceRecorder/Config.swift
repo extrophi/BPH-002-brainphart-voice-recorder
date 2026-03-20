@@ -89,7 +89,7 @@ enum Config {
     static var applicationSupportDirectory: URL {
         let fm = FileManager.default
         let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("VoiceRecorder")
+        let dir = appSupport.appendingPathComponent("brainphart-voice")
         if !fm.fileExists(atPath: dir.path) {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -98,7 +98,7 @@ enum Config {
 
     /// SQLite database path.
     static var databasePath: String {
-        applicationSupportDirectory.appendingPathComponent("voicerecorder.db").path
+        applicationSupportDirectory.appendingPathComponent("database.db").path
     }
 
     // MARK: Audio

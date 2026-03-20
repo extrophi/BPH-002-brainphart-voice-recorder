@@ -30,16 +30,41 @@ mkdir -p "${APP_BUNDLE}/Contents/Resources/models"
 # Copy binary
 cp "${BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/${BINARY_NAME}"
 
+# Copy SPM resource bundle (contains brainphart logo)
+BIN_DIR="$(dirname "${BIN_PATH}")"
+RESOURCE_BUNDLE="${BIN_DIR}/VoiceRecorder_VoiceRecorder.bundle"
+if [ -d "${RESOURCE_BUNDLE}" ]; then
+    cp -R "${RESOURCE_BUNDLE}" "${APP_BUNDLE}/Contents/Resources/"
+    echo "Copied resource bundle"
+fi
+
 # Copy model
 MODEL_PATH="${PROJECT_ROOT}/Resources/models/ggml-base.en.bin"
 if [ -f "${MODEL_PATH}" ]; then
     cp "${MODEL_PATH}" "${APP_BUNDLE}/Contents/Resources/models/"
 fi
 
-# Copy app icon if available
+# Generate .icns from source PNG
 ICON_PATH="${PROJECT_ROOT}/assets/img/brainph-icon.png"
 if [ -f "${ICON_PATH}" ]; then
-    cp "${ICON_PATH}" "${APP_BUNDLE}/Contents/Resources/AppIcon.png"
+    ICONSET_DIR="/tmp/AppIcon.iconset"
+    rm -rf "${ICONSET_DIR}"
+    mkdir -p "${ICONSET_DIR}"
+    sips -z 16 16     "${ICON_PATH}" --out "${ICONSET_DIR}/icon_16x16.png"      >/dev/null
+    sips -z 32 32     "${ICON_PATH}" --out "${ICONSET_DIR}/icon_16x16@2x.png"   >/dev/null
+    sips -z 32 32     "${ICON_PATH}" --out "${ICONSET_DIR}/icon_32x32.png"      >/dev/null
+    sips -z 64 64     "${ICON_PATH}" --out "${ICONSET_DIR}/icon_32x32@2x.png"   >/dev/null
+    sips -z 128 128   "${ICON_PATH}" --out "${ICONSET_DIR}/icon_128x128.png"    >/dev/null
+    sips -z 256 256   "${ICON_PATH}" --out "${ICONSET_DIR}/icon_128x128@2x.png" >/dev/null
+    sips -z 256 256   "${ICON_PATH}" --out "${ICONSET_DIR}/icon_256x256.png"    >/dev/null
+    sips -z 512 512   "${ICON_PATH}" --out "${ICONSET_DIR}/icon_256x256@2x.png" >/dev/null
+    sips -z 512 512   "${ICON_PATH}" --out "${ICONSET_DIR}/icon_512x512.png"    >/dev/null
+    sips -z 1024 1024 "${ICON_PATH}" --out "${ICONSET_DIR}/icon_512x512@2x.png" >/dev/null
+    iconutil -c icns "${ICONSET_DIR}" -o "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+    rm -rf "${ICONSET_DIR}"
+    echo "Generated AppIcon.icns from ${ICON_PATH}"
+else
+    echo "WARNING: Icon source not found at ${ICON_PATH}"
 fi
 
 # Add Applications symlink for drag-and-drop install
@@ -75,6 +100,10 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << 'PLIST'
     <string>BrainPhart Voice needs accessibility access to paste transcribed text at your cursor location.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>LSUIElement</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
 </dict>
 </plist>
 PLIST
@@ -115,7 +144,12 @@ tell application "Finder"
 end tell
 APPLESCRIPT
     sync
-    hdiutil detach "${MOUNT_DIR}"
+    sleep 2
+    # Retry detach — Finder may hold a reference from the AppleScript.
+    hdiutil detach "${MOUNT_DIR}" 2>/dev/null || {
+        sleep 3
+        hdiutil detach "${MOUNT_DIR}" -force 2>/dev/null || true
+    }
 fi
 
 # Convert to compressed read-only DMG

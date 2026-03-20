@@ -11,6 +11,7 @@
 
 import SwiftUI
 import AppKit
+import ApplicationServices
 import VoiceRecorderBridge
 
 @main
@@ -31,6 +32,29 @@ struct VoiceRecorderApp: App {
                 }
         }
         .defaultSize(width: 720, height: 520)
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About BrainPhart Voice") {
+                    NSApp.orderFrontStandardAboutPanel(options: [
+                        .applicationName: "BrainPhart Voice",
+                        .applicationVersion: "0.2.0",
+                    ])
+                }
+            }
+
+            CommandGroup(replacing: .newItem) {
+                Button("New Recording") {
+                    NotificationCenter.default.post(name: .toggleRecordingAction, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: .command)
+            }
+
+            CommandGroup(replacing: .help) {
+                Button("BrainPhart Voice Help") {
+                    // Placeholder — could open docs URL
+                }
+            }
+        }
 
         Settings {
             SettingsView()
@@ -145,6 +169,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let appSettings = AppSettings()
     private var statusItem: NSStatusItem?
     private var flagsMonitor: Any?
+    private var localFlagsMonitor: Any?
     private var escapeMonitor: Any?
     private var modifiersDown = false
     private var keyDownTimestamp: Date?
@@ -152,6 +177,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenuBarItem()
+        checkPermissionsOnLaunch()
         registerGlobalHotkey()
         registerEscapeMonitor()
 
@@ -178,7 +204,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        appState.showFloatingOverlay()
+        // Overlay is shown on-demand when recording starts (not at launch).
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard appState.isRecording else { return .terminateNow }
+
+        let alert = NSAlert()
+        alert.messageText = "Recording in Progress"
+        alert.informativeText = "A recording is in progress. Quitting will stop the recording and attempt to transcribe it. Are you sure?"
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            appState.stopRecording()
+            return .terminateNow
+        }
+        return .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -197,8 +241,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func installMenuBarItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "mic.fill",
-                                   accessibilityDescription: "BrainPhart Voice")
+            if let url = Bundle.module.url(forResource: "brain-menubar", withExtension: "png"),
+               let img = NSImage(contentsOf: url) {
+                img.isTemplate = true
+                img.size = NSSize(width: 18, height: 18)
+                button.image = img
+            } else {
+                button.image = NSImage(systemSymbolName: "mic.fill",
+                                       accessibilityDescription: "BrainPhart Voice")
+            }
         }
 
         let menu = NSMenu()
@@ -222,6 +273,83 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
+    // MARK: - Permission Checks
+
+    /// Check Input Monitoring, Accessibility, and (macOS 15+) PostEvent permissions on launch.
+    /// macOS Tahoe (26) resets TCC permissions during upgrades, so the app
+    /// must detect this and guide the user to re-grant them.
+    /// On macOS 15+, PostEvent is a SEPARATE TCC permission from Accessibility —
+    /// both must be granted for CGEvent posting (auto-paste) to work.
+    private func checkPermissionsOnLaunch() {
+        let hasInputMonitoring = CGPreflightListenEventAccess()
+        let hasAccessibility = AXIsProcessTrusted()
+
+        // macOS 15+ has a SEPARATE PostEvent TCC permission from Accessibility.
+        // Both are required: Accessibility for AX APIs, PostEvent for CGEvent posting.
+        let hasPostEvent: Bool
+        if #available(macOS 15, *) {
+            hasPostEvent = CGPreflightPostEventAccess()
+        } else {
+            hasPostEvent = hasAccessibility
+        }
+
+        log.info("Permission check — InputMonitoring: \(hasInputMonitoring), Accessibility: \(hasAccessibility), PostEvent: \(hasPostEvent)")
+
+        // Request PostEvent permission proactively if not granted (macOS 15+).
+        // This prompts the system dialog upfront rather than on first paste attempt.
+        if #available(macOS 15, *), !hasPostEvent {
+            let granted = CGRequestPostEventAccess()
+            log.info("CGRequestPostEventAccess result: \(granted)")
+        }
+
+        if !hasInputMonitoring {
+            CGRequestListenEventAccess()
+            appState.setError("Input Monitoring permission required for global hotkey (⌥⇧). Grant in System Settings > Privacy & Security > Input Monitoring, then relaunch.")
+        }
+
+        if !hasAccessibility {
+            showPermissionAlert(
+                title: "Accessibility Permission Required",
+                message: """
+                    BrainPhart Voice needs Accessibility permission to auto-paste \
+                    transcriptions at your cursor.
+
+                    After a fresh install or macOS update, you may need to:
+                    1. Open System Settings > Privacy & Security > Accessibility
+                    2. Remove any old BrainPhart Voice entry
+                    3. Add the new one from /Applications/
+                    4. Relaunch the app
+                    """,
+                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            )
+        }
+    }
+
+    private func showPermissionAlert(title: String, message: String, settingsURL: String) {
+        // Temporarily show the app so the alert is visible.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Later")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            if let url = URL(string: settingsURL) {
+                NSWorkspace.shared.open(url)
+            }
+        }
+
+        // Switch back to accessory mode — installMenuBarItem runs before this.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
     // MARK: - Global Hotkey (Option+Shift via flagsChanged monitor)
 
     /// Minimum hold duration (seconds) to distinguish a hold from a tap.
@@ -232,10 +360,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private static let modifierMask: NSEvent.ModifierFlags = [.option, .shift, .command, .control]
 
     private func registerGlobalHotkey() {
+        // Global monitor: receives events when app is NOT frontmost.
+        // Requires Input Monitoring permission (TCC ListenEvent).
         flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             Task { @MainActor [weak self] in
                 self?.handleFlagsChanged(event)
             }
+        }
+
+        if flagsMonitor == nil {
+            // Global monitor returned nil — TCC Input Monitoring permission is denied or was reset.
+            // The app can still record when it is frontmost (localFlagsMonitor works without TCC),
+            // but the global hotkey will not fire from other apps.
+            appState.setError("Input Monitoring permission denied — global hotkey (⌥⇧) disabled. Grant in System Settings > Privacy & Security > Input Monitoring.")
+            showPermissionAlert(
+                title: "Input Monitoring Permission Required",
+                message: """
+                    BrainPhart Voice could not register the global hotkey (⌥⇧).
+
+                    This happens when Input Monitoring permission is denied or was reset \
+                    (e.g. after a macOS or Xcode update).
+
+                    To fix this:
+                    1. Open System Settings > Privacy & Security > Input Monitoring
+                    2. After a fresh install, remove the old entry and re-add from /Applications/
+                    3. Enable BrainPhart Voice (or re-add it)
+                    4. Relaunch the app
+
+                    Until then, the hotkey will only work while BrainPhart Voice is the active app.
+                    """,
+                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+            )
+        }
+
+        // Local monitor: receives events when app IS frontmost.
+        // Does NOT require Input Monitoring permission.
+        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.handleFlagsChanged(event)
+            }
+            return event
         }
     }
 

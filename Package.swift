@@ -74,6 +74,9 @@ let package = Package(
             name: "VoiceRecorder",
             dependencies: ["VoiceRecorderBridge"],
             path: "Sources/VoiceRecorder",
+            resources: [
+                .process("Resources"),
+            ],
             swiftSettings: [
                 .define("MACOS_BUILD"),
             ]

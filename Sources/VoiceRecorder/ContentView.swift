@@ -89,13 +89,28 @@ struct ContentView: View {
            let session = appState.sessions.first(where: { $0.sessionId == sessionId }) {
             SessionDetailView(session: session)
         } else {
-            VStack(spacing: 12) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.tertiary)
-                Text("Select a recording to view details")
-                    .font(.headline)
+            VStack(spacing: 16) {
+                // BrainPhart logo
+                if let url = Bundle.module.url(forResource: "brainph-logo-final", withExtension: "png"),
+                   let nsImage = NSImage(contentsOf: url) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 120, height: 120)
+                } else {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Text("BrainPhart Voice")
+                    .font(.title2)
+                    .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
+
+                Text("Select a recording to view details")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
             }
         }
     }

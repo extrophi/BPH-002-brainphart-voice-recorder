@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # BrainPh.art Voice Recorder — Agent Instructions
 
 ## What This Is
@@ -57,32 +61,49 @@ Records audio via AVAudioEngine (16kHz mono PCM), transcribes locally via whispe
 5. **NSPanel floating window**
    - `.floating` level + `.canJoinAllSpaces` + `hidesOnDeactivate = false`
    - Non-activating: never steals focus from user's current app
-   - Global hotkey: Cmd+Shift+Space toggles recording
+   - Global hotkey: Option+Shift (modifier-only, via `flagsChanged` monitor)
+
+6. **Two recording modes** (configurable in Settings)
+   - **Toggle:** Option+Shift starts/stops recording
+   - **Push-to-talk:** Hold Option+Shift to record, release to stop (taps < 0.3s cancel)
+   - Double-Escape cancels recording in either mode
+
+7. **Crash recovery**
+   - On launch, orphaned sessions (left in "recording" status) are detected
+   - Sessions > 1s are automatically re-transcribed; shorter ones are deleted
 
 ---
 
 ## Build Commands
 
-### Step 1: Build C++ static library
+### First-time setup (dependencies + whisper model download)
 ```bash
-cd /Users/kjd/01-projects/BPH-002-brainphart-voice-recorder
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_METAL=ON
-cmake --build build -j
+bash Scripts/setup.sh
+```
+This builds whisper.cpp (with Metal), FFmpeg (static), and downloads `ggml-base.en.bin` (~148MB).
+
+### Quick build (convenience script)
+```bash
+bash Scripts/build.sh
 ```
 
-### Step 2: Build Swift app
+### Manual build (two-step)
 ```bash
+# Step 1: C++ static library
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_METAL=ON
+cmake --build build -j
+
+# Step 2: Swift app
 swift build -c release 2>&1
 ```
 
-### Step 3: Verify build
+### Verify build
 ```bash
-# Must exit 0 with no errors
 swift build -c release 2>&1 | grep -c "error:"
 # Expected output: 0
 ```
 
-### Step 4: Package DMG (optional)
+### Package DMG (optional)
 ```bash
 bash Scripts/create-dmg.sh
 ```
@@ -96,11 +117,13 @@ bash Scripts/create-dmg.sh
 ```
 Sources/
 ├── VoiceRecorder/                  # Swift UI layer
-│   ├── VoiceRecorderApp.swift      # Entry point, hotkey, model loading
-│   ├── AppState.swift              # @MainActor state machine (337 lines)
-│   ├── AudioManager.swift          # AVAudioEngine 16kHz PCM recording (295 lines)
-│   ├── Config.swift                # Centralized config, model path resolution
-│   ├── FloatingOverlay.swift       # NSPanel floating window (273 lines)
+│   ├── VoiceRecorderApp.swift      # Entry point, AppDelegate, hotkey, menu bar
+│   ├── AppState.swift              # @MainActor state machine, recording lifecycle
+│   ├── AudioManager.swift          # AVAudioEngine 16kHz PCM recording
+│   ├── Config.swift                # Centralized config, model path resolution, logging
+│   ├── Settings.swift              # AppSettings (@Observable, UserDefaults-backed)
+│   ├── SettingsView.swift          # Settings window UI
+│   ├── FloatingOverlay.swift       # NSPanel floating window
 │   ├── ContentView.swift           # Main window with history
 │   ├── HistoryView.swift           # Session list sidebar
 │   ├── WaveformView.swift          # Canvas waveform visualization
@@ -122,6 +145,11 @@ Sources/
 └── Resources/models/               # ggml-base.en.bin whisper model
 ```
 
+### Data Storage
+- SQLite database: `~/Library/Application Support/VoiceRecorder/voicerecorder.db` (WAL mode)
+- Logging: `os.log` via `Logger` (subsystem `art.brainph.voice`, category `BrainPhartVoice`)
+- Settings: `UserDefaults` (auto-paste, recording mode, hotkey, model path)
+
 ### Dead code (NOT compiled, NOT in CMake):
 - `StorageManager.cpp/.hpp` — old orchestrator, replaced by AppState.swift
 - `AudioRecorder.cpp/.hpp` — old FFmpeg recorder, replaced by AudioManager.swift
@@ -139,8 +167,8 @@ Documentation is fetched by caveman-docs before each job. If docs/ is empty or m
 ## Recording Flow (Complete Pipeline)
 
 ```
-User presses Cmd+Shift+Space
-    → AppState.toggleRecording()
+User presses Option+Shift (toggle mode) or holds Option+Shift (push-to-talk)
+    → AppDelegate.handleFlagsChanged() → AppState.toggleRecording() / startRecording()
     → AppState.startRecording()
         → StorageBridge.createSession() → UUID
         → AudioManager.startRecording()
@@ -153,7 +181,7 @@ User presses Cmd+Shift+Space
         → Metering timer (50ms): polls AudioManager.getMeteringLevel()
         → Elapsed timer (1s): increments recordingElapsedSeconds
 
-User presses Cmd+Shift+Space again
+User presses Option+Shift again (toggle) or releases keys (push-to-talk)
     → AppState.stopRecording()
         → AudioManager.stopRecording()
             → Flushes final partial chunk

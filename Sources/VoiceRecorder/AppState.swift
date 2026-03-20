@@ -118,12 +118,48 @@ final class AppState {
 
     // MARK: - Floating Overlay
 
+    /// Timer that hides the overlay after a delay.
+    private var overlayHideTimer: Timer?
+
     /// Creates and shows the floating overlay panel.
     func showFloatingOverlay() {
-        guard floatingController == nil else { return }
+        overlayHideTimer?.invalidate()
+        overlayHideTimer = nil
+
+        guard floatingController == nil else {
+            // Already showing — just ensure visible.
+            floatingController?.window?.alphaValue = 1.0
+            floatingController?.window?.orderFrontRegardless()
+            return
+        }
         let controller = FloatingPanelController(appState: self)
         controller.showWindow(nil)
         floatingController = controller
+    }
+
+    /// Hides the floating overlay panel with a fade-out animation.
+    func hideFloatingOverlay() {
+        overlayHideTimer?.invalidate()
+        overlayHideTimer = nil
+
+        guard let panel = floatingController?.window else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.5
+            panel.animator().alphaValue = 0.0
+        }, completionHandler: { [weak self] in
+            self?.floatingController?.close()
+            self?.floatingController = nil
+        })
+    }
+
+    /// Hides the overlay after a short delay (used after paste completes).
+    func hideFloatingOverlayAfterDelay() {
+        overlayHideTimer?.invalidate()
+        overlayHideTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.hideFloatingOverlay()
+            }
+        }
     }
 
     // MARK: - Recording Lifecycle
@@ -170,6 +206,9 @@ final class AppState {
         recordingElapsedSeconds = 0
         startMeteringPolling()
         startElapsedTimer()
+
+        // Show the floating overlay when recording starts.
+        showFloatingOverlay()
     }
 
     /// Stop the current recording and begin transcription.
@@ -197,6 +236,7 @@ final class AppState {
                 setError("Failed to save final audio chunk — recording may be lost")
                 activeSessionId = nil
                 loadSessions()
+                hideFloatingOverlayAfterDelay()
                 return
             }
         } else if finalChunk == nil {
@@ -226,6 +266,9 @@ final class AppState {
             activeSessionId = nil
             loadSessions()
         }
+
+        // Hide overlay immediately on cancel.
+        hideFloatingOverlay()
     }
 
     /// Toggle between recording and stopped.
@@ -245,6 +288,7 @@ final class AppState {
     private func transcribeActiveSession() {
         guard let sessionId = activeSessionId else {
             setError("No active session to transcribe")
+            hideFloatingOverlayAfterDelay()
             return
         }
 
@@ -253,6 +297,7 @@ final class AppState {
             setError("Whisper model not loaded — transcription unavailable")
             isTranscribing = false
             loadSessions()
+            hideFloatingOverlayAfterDelay()
             return
         }
 
@@ -264,6 +309,7 @@ final class AppState {
             setError("No audio data found for session — cannot transcribe")
             isTranscribing = false
             loadSessions()
+            hideFloatingOverlayAfterDelay()
             return
         }
 
@@ -271,6 +317,7 @@ final class AppState {
             setError("Audio data is empty — cannot transcribe")
             isTranscribing = false
             loadSessions()
+            hideFloatingOverlayAfterDelay()
             return
         }
 
@@ -284,6 +331,7 @@ final class AppState {
             isTranscribing = false
             activeSessionId = nil
             loadSessions()
+            hideFloatingOverlayAfterDelay()
             return
         }
 
@@ -307,12 +355,16 @@ final class AppState {
                         self.storageBridge.completeSession(sessionId, withDuration: self.recordingElapsedSeconds * 1000)
                         self.latestTranscript = transcript
 
-                        // Auto-paste the transcription to the user's cursor.
+                        // Always auto-paste transcript to cursor position.
                         AutoPaste.pasteText(transcript)
+
+                        // Hide the overlay after a short delay to show completion.
+                        self.hideFloatingOverlayAfterDelay()
                     } else {
                         let msg = error?.localizedDescription ?? "Unknown transcription error"
                         self.setError("Transcription failed: \(msg)")
                         log.error("Transcription failed for session \(sessionId): \(msg)")
+                        self.hideFloatingOverlayAfterDelay()
                     }
 
                     self.activeSessionId = nil
